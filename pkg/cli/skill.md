@@ -165,6 +165,7 @@ As the user investigates, be proactive:
 The commands above cover the common incident workflow. For anything else, `fhcli api` exposes every public API operation, generated from FireHydrant's OpenAPI spec:
 
 ```
+fhcli search severity matrix                  # find the command for a task (offline, ranked)
 fhcli api --help                              # list API areas
 fhcli api incidents --help                    # list operations in an area
 fhcli api incidents list-incidents --help     # list an operation's flags
@@ -172,6 +173,7 @@ fhcli api incidents list-incidents --status open --per-page 5
 ```
 
 - Prefer a curated command above (`triage`, `context`, `note`, `update`, …) when one fits.
+- **To find an operation, run `fhcli search <what you want to do>` first** instead of browsing `--help`: area names follow the API's internals (the severity matrix is under `incident-settings`; status pages are the `nunc` operations). Each result gives the ready-to-run `command` and its positional `args`; then check `--help` on the one you pick.
 - Path parameters are positional arguments, in the order shown by `--help` (e.g. `<incident_id> <role_id>`).
 - Incidents can be referenced by number (e.g. `623`) anywhere an incident ID is expected — in the curated commands and in `fhcli api`, which resolves the number to the incident's ID before calling (some endpoints silently return nothing for a raw number).
 - Simple body fields are flags. Nested fields go in `--data '{...}'`, `--data @file.json`, or `--data -` (stdin). Flags override keys in `--data`.
@@ -206,6 +208,7 @@ fhcli api incidents list-incidents --status open --per-page 5
 | `fhcli event <summary> [--environment E] [--service S] [--labels "k=v"]` | Submit a change event |
 | `fhcli execute <command> [--environment E] [--service S]` | Run a command and track as change event |
 | `fhcli api <area> <operation> [args] [--flags] [--data JSON] [--dry-run] [--yes]` | Call any public API operation |
+| `fhcli search <words...> [--limit N]` | Find the `fhcli api` command for a task |
 | `fhcli login [--region us\|eu\|au\|in\|staging] [--org ID] [--no-browser]` | Log in with the browser (user runs this, not the agent) |
 | `fhcli logout [--region R]` | Revoke and delete the stored login |
 | `fhcli whoami` | Show user, organization, region, and auth source |

@@ -81,6 +81,7 @@ To configure firehydrant and write a config file (defaults to /tmp/firehydrant.c
 `fhcli api` exposes every FireHydrant public API operation, generated at runtime from the OpenAPI spec (`https://api.firehydrant.io/v1/swagger_doc`) embedded in the binary.
 
 ```
+fhcli search severity matrix                         # find the right operation for a task
 fhcli api --help                                     # API areas
 fhcli api incidents list-incidents --status open     # query params are flags
 fhcli api incidents get-incident <incident_id>       # path params are positional
