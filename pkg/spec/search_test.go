@@ -1,7 +1,9 @@
 package spec
 
 import (
+	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -126,8 +128,22 @@ func TestSearchScoresAreDescending(t *testing.T) {
 	}
 }
 
+// loadEmbeddedSpec returns the embedded spec, or the spec file named by
+// FHCLI_TEST_SPEC so the whole-spec tests can run against a freshly fetched
+// spec (e.g. `curl -o /tmp/live.json https://api.firehydrant.io/v1/swagger_doc`).
 func loadEmbeddedSpec(t *testing.T) *Spec {
 	t.Helper()
+	if path := os.Getenv("FHCLI_TEST_SPEC"); path != "" {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := Parse(data)
+		if err != nil {
+			t.Fatalf("FHCLI_TEST_SPEC %s: %v", path, err)
+		}
+		return s
+	}
 	s, err := loadEmbedded()
 	if err != nil {
 		t.Fatal(err)
@@ -189,13 +205,85 @@ func TestSearchRealSpecIsFast(t *testing.T) {
 // which lowers the summary-focus tie-break below the replacement's.
 func TestSearchRanksDeprecatedOperationsLast(t *testing.T) {
 	s := &Spec{Operations: []Operation{
-		{ID: "a_get_on_call_shift", Tag: "Teams", Summary: "[DEPRECATED] Get an on-call shift"},
-		{ID: "b_get_on_call_shift", Tag: "Teams", Summary: "Get an on-call shift"},
+		{ID: "get_on_call_shift_v1", Tag: "Teams", Summary: "[DEPRECATED] Get an on-call shift"},
+		{ID: "get_on_call_shift_v2", Tag: "Teams", Summary: "Get an on-call shift"},
 	}}
 
 	got := resultIDs(s.Search("on call shift", 10))
 
-	if !reflect.DeepEqual(got, []string{"b_get_on_call_shift", "a_get_on_call_shift"}) {
+	if !reflect.DeepEqual(got, []string{"get_on_call_shift_v2", "get_on_call_shift_v1"}) {
 		t.Errorf("results = %v, want the deprecated operation after its replacement", got)
+	}
+}
+
+// rank is the 1-based position of id in rs, or 0 if absent.
+func rank(rs []Result, id string) int {
+	for i, r := range rs {
+		if r.Operation.ID == id {
+			return i + 1
+		}
+	}
+	return 0
+}
+
+// Every operation in the real spec is the top result when you search for
+// its own name (operationId with spaces), so an agent that knows or guesses
+// the operation's name always lands on it.
+func TestSearchRealSpecFindsEveryOperationByName(t *testing.T) {
+	s := loadEmbeddedSpec(t)
+
+	for _, op := range s.Operations {
+		query := strings.ReplaceAll(op.ID, "_", " ")
+		if r := rank(s.Search(query, 0), op.ID); r != 1 {
+			t.Errorf("search %q: %s ranked %d, want 1", query, op.ID, r)
+		}
+	}
+}
+
+// Every operation is found by its own summary. Summaries are not unique in
+// the spec (e.g. "Create a status page" is both create_nunc_connection and
+// create_incident_status_page), so an operation must rank within the group
+// that shares its summary.
+func TestSearchRealSpecFindsEveryOperationBySummary(t *testing.T) {
+	s := loadEmbeddedSpec(t)
+	shared := map[string]int{}
+	for _, op := range s.Operations {
+		shared[strings.Join(tokenize(op.Summary), " ")]++
+	}
+
+	for _, op := range s.Operations {
+		if strings.TrimSpace(op.Summary) == "" {
+			t.Errorf("%s has no summary", op.ID)
+			continue
+		}
+		limit := shared[strings.Join(tokenize(op.Summary), " ")]
+		if r := rank(s.Search(op.Summary, 0), op.ID); r == 0 || r > limit {
+			t.Errorf("search %q: %s ranked %d, want within the %d operation(s) sharing that summary", op.Summary, op.ID, r, limit)
+		}
+	}
+}
+
+// No word from the spec, and no odd input, makes Search panic, and every
+// word that appears in an operation's name finds that operation.
+func TestSearchRealSpecHandlesEveryWordAndOddInput(t *testing.T) {
+	s := loadEmbeddedSpec(t)
+	words := map[string]bool{}
+	for _, op := range s.Operations {
+		for _, w := range tokenize(op.ID + " " + op.Summary + " " + op.Tag + " " + op.Path) {
+			words[w] = true
+		}
+	}
+
+	for w := range words {
+		if len(s.Search(w, 1)) == 0 {
+			t.Errorf("search %q found nothing, but the word comes from the spec", w)
+		}
+	}
+	for _, q := range []string{"", "   ", "!!!", "{incident_id}", "/v1/incidents", "インシデント", "émoji 🔥 incident",
+		strings.Repeat("incident ", 2000), "SEVERITY_MATRIX", "severity-matrix"} {
+		s.Search(q, 10)
+	}
+	if got := rank(s.Search("severity-matrix", 1), "get_severity_matrix") + rank(s.Search("severity-matrix", 1), "update_severity_matrix"); got == 0 {
+		t.Error("kebab-case query should match like spaced words")
 	}
 }

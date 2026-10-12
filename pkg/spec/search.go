@@ -23,6 +23,19 @@ const (
 	weightPath        = 2
 	weightParam       = 1.5
 	weightDescription = 1
+
+	// weightExactName and weightExactSummary reward a query that is exactly
+	// an operation's name ("create change" for create_change) or summary.
+	// Both are below the 100 per matched word, so they only reorder
+	// operations matching every word. A name match beats a summary match:
+	// "list service environments" is list_service_environments, even though
+	// list_environment_services's summary has the same words.
+	weightExactName    = 50
+	weightExactSummary = 40
+	// weightOrder rewards each adjacent query word pair that appears in the
+	// same order in the summary or name, separating list_service_environments
+	// from list_environment_services. Small enough to only break ties.
+	weightOrder = 0.1
 )
 
 var stopWords = map[string]bool{
@@ -32,14 +45,18 @@ var stopWords = map[string]bool{
 
 // Search ranks operations against a free-text query and returns at most
 // limit results (all of them when limit <= 0). Operations matching more of
-// the query's words rank first, then by match strength, then by how much of
-// the summary the query covers, so "Get severity matrix" outranks "Delete a
-// severity matrix condition" for "severity matrix".
+// the query's words rank first, then by match strength, an exact name or
+// summary match, how much of the summary and name the query covers, and word
+// order, so "Get severity matrix" outranks "Delete a severity matrix
+// condition" for "severity matrix".
 func (s *Spec) Search(query string, limit int) []Result {
-	words := uniq(tokenize(query))
+	sequence := tokenize(query)
+	words := uniq(sequence)
 	if len(words) == 0 {
 		return nil
 	}
+	exactName := strings.Join(rawWords(query), "_")
+	exactSummary := strings.Join(sequence, " ")
 	queryWords := make(map[string]bool, len(words))
 	for _, w := range words {
 		queryWords[w] = true
@@ -68,9 +85,19 @@ func (s *Spec) Search(query string, limit int) []Result {
 		if matched == 0 {
 			continue
 		}
-		focus := coverage(tokenize(op.Summary), queryWords)
-		// Words matched dominate; strength and summary focus break ties.
-		score := float64(matched)*100 + strength + focus
+		summary, name := tokenize(op.Summary), tokenize(op.ID)
+		// Words matched dominate; then match strength; then an exact name or
+		// summary match; then how much of the summary and name the query
+		// covers; then word order.
+		score := float64(matched)*100 + strength
+		switch {
+		case exactName == op.ID:
+			score += weightExactName
+		case exactSummary == strings.Join(summary, " "):
+			score += weightExactSummary
+		}
+		score += (coverage(summary, queryWords) + coverage(name, queryWords)) / 2
+		score += weightOrder * float64(max(pairsInOrder(sequence, summary), pairsInOrder(sequence, name)))
 		hits = append(hits, ranked{Result{Operation: op, Score: score}, i})
 	}
 
@@ -137,13 +164,36 @@ func coverage(summary []string, query map[string]bool) float64 {
 	return float64(n) / float64(len(distinct))
 }
 
+// pairsInOrder counts adjacent pairs in query that are also adjacent, in the
+// same order, in text.
+func pairsInOrder(query, text []string) int {
+	pairs := map[[2]string]bool{}
+	for i := 1; i < len(text); i++ {
+		pairs[[2]string{text[i-1], text[i]}] = true
+	}
+	n := 0
+	for i := 1; i < len(query); i++ {
+		if pairs[[2]string{query[i-1], query[i]}] {
+			n++
+		}
+	}
+	return n
+}
+
+// rawWords lowercases s and splits it on anything that isn't a letter or
+// digit, keeping every word as written (no stop words dropped, no
+// singularizing), for exact-name comparison.
+func rawWords(s string) []string {
+	return strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+}
+
 // tokenize lowercases s, splits it on anything that isn't a letter or digit
 // (so snake_case, kebab-case, paths and {params} break apart), drops stop
 // words, and singularizes each word.
 func tokenize(s string) []string {
-	fields := strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
-	})
+	fields := rawWords(s)
 	words := fields[:0]
 	for _, f := range fields {
 		if stopWords[f] {
