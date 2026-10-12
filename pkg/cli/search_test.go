@@ -3,8 +3,11 @@ package cli
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/firehydrant/fhcli/pkg/spec"
 )
 
 type searchOutput struct {
@@ -112,5 +115,54 @@ func TestSearchCmdReportsSpecLoadError(t *testing.T) {
 
 	if err == nil || !strings.Contains(stderr, "fhcli spec update") {
 		t.Errorf("err = %v, stderr = %s", err, stderr)
+	}
+}
+
+// Every command `fhcli search` can print actually runs: for each operation in
+// the embedded spec, the search hit's command and positional args go through
+// the real root command with --dry-run and must produce that operation's
+// request. This also exercises the whole generated `fhcli api` surface.
+func TestEverySearchHitIsARunnableCommand(t *testing.T) {
+	sp, err := spec.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const host = "https://api.example.test"
+
+	for _, op := range sp.Operations {
+		hit := searchHits([]spec.Result{{Operation: op}})[0]
+		words := strings.Fields(hit.Command)
+		// Look the command up first: running an unknown command makes urfave
+		// exit the whole test binary instead of returning an error.
+		if len(words) != 4 || words[0] != "fhcli" || words[1] != "api" || NewRootCmd("test", "0.0.0-test").Command("api").Command(words[2]).Command(words[3]) == nil {
+			t.Errorf("%s (%s): search printed a command that isn't registered", hit.Command, op.ID)
+			continue
+		}
+		argv := append([]string{"fhcli", "--token", "test-token", "--api-host", host}, words[1:]...)
+		wantPath := op.Path
+		for i, a := range hit.Args {
+			value := fmt.Sprintf("arg%d", i)
+			argv = append(argv, value)
+			wantPath = strings.ReplaceAll(wantPath, "{"+a+"}", value)
+		}
+		argv = append(argv, "--dry-run")
+
+		stdout, stderr, err := runRoot(t, NewRootCmd("test", "0.0.0-test"), argv...)
+
+		if err != nil {
+			t.Errorf("%s: %v\nstderr: %s", hit.Command, err, stderr)
+			continue
+		}
+		var got dryRunOutput
+		if jerr := json.Unmarshal([]byte(stdout), &got); jerr != nil {
+			t.Errorf("%s: dry-run output is not JSON: %v\n%s", hit.Command, jerr, stdout)
+			continue
+		}
+		if got.Method != op.Method || got.URL != host+wantPath {
+			t.Errorf("%s: dry-run = %s %s, want %s %s", hit.Command, got.Method, got.URL, op.Method, host+wantPath)
+		}
+		if strings.Contains(got.URL, "{") {
+			t.Errorf("%s: unsubstituted path param in %s", hit.Command, got.URL)
+		}
 	}
 }

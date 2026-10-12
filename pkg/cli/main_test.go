@@ -13,6 +13,20 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	os.Setenv("XDG_CONFIG_HOME", dir)
+	// FHCLI_TEST_SPEC runs the CLI tests against another spec file (for
+	// example a freshly fetched live spec) by installing it as the override.
+	if path := os.Getenv("FHCLI_TEST_SPEC"); path != "" {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			panic(err)
+		}
+		if err := os.MkdirAll(dir+"/fhcli", 0o700); err != nil {
+			panic(err)
+		}
+		if err := os.WriteFile(dir+"/fhcli/spec.json", data, 0o600); err != nil {
+			panic(err)
+		}
+	}
 	// Never read or write the developer's real Keychain login.
 	os.Setenv("FHCLI_TOKEN_STORE", "file")
 	// Keep the developer's credentials and host out of tests: a real token

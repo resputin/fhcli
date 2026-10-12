@@ -211,7 +211,8 @@ func TestAPICmdRegistersEveryEmbeddedOperation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sp.Source != spec.EmbeddedSource {
+	// FHCLI_TEST_SPEC deliberately installs another spec as the override.
+	if sp.Source != spec.EmbeddedSource && os.Getenv("FHCLI_TEST_SPEC") == "" {
 		t.Fatalf("expected the embedded spec (TestMain isolates XDG_CONFIG_HOME), got %q", sp.Source)
 	}
 
