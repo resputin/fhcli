@@ -23,6 +23,10 @@ const (
 	weightPath        = 2
 	weightParam       = 1.5
 	weightDescription = 1
+	// weightNotes is for the overlay's curated usage notes, which are written
+	// to answer task-shaped queries ("follow-ups are tickets"), so they count
+	// more than the spec's generic descriptions.
+	weightNotes = 2
 
 	// weightExactName and weightExactSummary reward a query that is exactly
 	// an operation's name ("create change" for create_change) or summary.
@@ -36,6 +40,10 @@ const (
 	// same order in the summary or name, separating list_service_environments
 	// from list_environment_services. Small enough to only break ties.
 	weightOrder = 0.1
+
+	// weightSynonym scales a field's weight when a query word matches it
+	// through a synonym rather than literally.
+	weightSynonym = 0.5
 )
 
 var stopWords = map[string]bool{
@@ -75,6 +83,13 @@ func (s *Spec) Search(query string, limit int) []Result {
 			for _, f := range fields {
 				if f.weight > best && f.words[w] {
 					best = f.weight
+				}
+				// A synonym counts as a match at reduced weight, so the
+				// word the user typed always beats its synonyms.
+				for _, alt := range synonyms[w] {
+					if f.weight*weightSynonym > best && f.words[alt] {
+						best = f.weight * weightSynonym
+					}
 				}
 			}
 			if best > 0 {
@@ -125,10 +140,12 @@ type searchField struct {
 }
 
 func searchFields(op Operation) []searchField {
-	var params []string
+	var params, details []string
 	for _, group := range [][]Param{op.PathParams, op.QueryParams, op.BodyFields} {
 		for _, p := range group {
 			params = append(params, p.Name)
+			params = append(params, p.Enum...)
+			details = append(details, p.Description)
 		}
 	}
 	return []searchField{
@@ -137,8 +154,29 @@ func searchFields(op Operation) []searchField {
 		{weightTag, wordSet(op.Tag)},
 		{weightPath, wordSet(op.Path)},
 		{weightParam, wordSet(strings.Join(params, " "))},
-		{weightDescription, wordSet(op.Description)},
+		{weightNotes, wordSet(strings.Join(op.Notes, " "))},
+		{weightDescription, wordSet(op.Description + " " + strings.Join(details, " "))},
 	}
+}
+
+// synonyms maps a query word (after tokenizing) to words that mean the same
+// thing in FireHydrant's API, matched at weightSynonym. Keep this short:
+// verbs responders use for CRUD, plus domain terms whose API name differs
+// (follow-ups are tickets; postmortems are retrospectives).
+var synonyms = map[string][]string{
+	"add":        {"create"},
+	"new":        {"create"},
+	"remove":     {"delete"},
+	"archive":    {"delete"},
+	"edit":       {"update"},
+	"show":       {"get"},
+	"fetch":      {"get"},
+	"followup":   {"follow", "ticket"},
+	"postmortem": {"retrospective", "post", "mortem"},
+	"retro":      {"retrospective"},
+	"rca":        {"retrospective"},
+	"oncall":     {"call"},
+	"milestone":  {"lifecycle", "phase"},
 }
 
 func wordSet(s string) map[string]bool {

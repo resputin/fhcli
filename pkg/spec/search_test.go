@@ -288,3 +288,44 @@ func TestSearchRealSpecHandlesEveryWordAndOddInput(t *testing.T) {
 		t.Error("kebab-case query should match like spaced words")
 	}
 }
+
+// Queries from the incident #661 session that missed the right operation.
+func TestSearchRealSpecFindsFollowUps(t *testing.T) {
+	s := loadEmbeddedSpec(t)
+
+	for _, q := range []string{"create follow up for incident", "incident follow ups", "add action item", "create followup"} {
+		if r := rank(s.Search(q, 0), "create_ticket"); r == 0 || r > 3 {
+			t.Errorf("search %q: create_ticket ranked %d, want top 3", q, r)
+		}
+	}
+}
+
+func TestSearchRealSpecUnderstandsSynonyms(t *testing.T) {
+	s := loadEmbeddedSpec(t)
+
+	for q, id := range map[string]string{
+		"postmortem fields":       "update_incident_retrospective_field",
+		"list retros":             "list_incident_retrospectives",
+		"milestone types":         "list_lifecycle_phases",
+		"list ticketing projects": "list_ticketing_projects",
+	} {
+		if r := rank(s.Search(q, 0), id); r == 0 || r > 5 {
+			t.Errorf("search %q: %s ranked %d, want top 5", q, id, r)
+		}
+	}
+}
+
+// Parameter descriptions and enum values are searched too, at low weight.
+func TestSearchMatchesParameterDescriptionsAndEnums(t *testing.T) {
+	s := &Spec{Operations: []Operation{
+		{ID: "make_widget", Summary: "Make a widget", BodyFields: []Param{{Name: "kind", Enum: []string{"sprocket"}, Description: "The flavour of widget"}}},
+		{ID: "other", Summary: "Something else"},
+	}}
+
+	if got := resultIDs(s.Search("sprocket", 10)); !reflect.DeepEqual(got, []string{"make_widget"}) {
+		t.Errorf("enum value search = %v", got)
+	}
+	if got := resultIDs(s.Search("flavour", 10)); !reflect.DeepEqual(got, []string{"make_widget"}) {
+		t.Errorf("param description search = %v", got)
+	}
+}

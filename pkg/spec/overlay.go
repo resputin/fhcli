@@ -49,6 +49,11 @@ var overlay = []overlayEntry{
 		Notes:     []string{"Valid milestone slugs and their order come from list_lifecycle_phases."},
 	},
 	{
+		Operation: "list_lifecycle_phases",
+		SeeAlso:   []string{"bulk_update_incident_milestones"},
+		Notes:     []string{"Lists the milestone types (slugs) in lifecycle order, as used by bulk_update_incident_milestones."},
+	},
+	{
 		Operation: "create_incident_note",
 		Notes: []string{
 			"Notes default to private_to_org. open_to_public is visible outside your organization; " +
