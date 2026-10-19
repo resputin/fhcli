@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -370,9 +371,38 @@ func runOperation(ctx context.Context, cmd *cli.Command, op spec.Operation, bind
 
 	resp, err := client.do(ctx, req.Method, req.Path, req.Query, body)
 	if err != nil {
-		return failCmd(cmd, err)
+		return failCmd(cmd, withTimeoutHint(op, err))
 	}
 	return outputResult(cmd, resp)
+}
+
+// withTimeoutHint adds advice to a timed-out request (a 504/408 from the API
+// or a client-side timeout): narrow it with the operation's own date/time
+// filter flags when it has any, since slow list endpoints are usually
+// scanning too wide a window.
+func withTimeoutHint(op spec.Operation, err error) error {
+	var ae *apiError
+	var ne net.Error
+	timedOut := (errors.As(err, &ae) && (ae.status == http.StatusGatewayTimeout || ae.status == http.StatusRequestTimeout)) ||
+		(errors.As(err, &ne) && ne.Timeout()) || errors.Is(err, context.DeadlineExceeded)
+	if !timedOut {
+		return err
+	}
+	var filters []string
+	paginated := false
+	for _, p := range op.QueryParams {
+		if strings.Contains(p.Name, "date") || strings.Contains(p.Name, "time") || strings.HasPrefix(p.Name, "since") {
+			filters = append(filters, "--"+commandName(p.Name))
+		}
+		paginated = paginated || p.Name == "per_page"
+	}
+	switch {
+	case len(filters) > 0:
+		return fmt.Errorf("%w (the request timed out; narrow it with %s)", err, strings.Join(filters, ", "))
+	case paginated:
+		return fmt.Errorf("%w (the request timed out; try narrower filters or a smaller --per-page, then retry)", err)
+	}
+	return fmt.Errorf("%w (the request timed out; retry, and check status.firehydrant.com if it persists)", err)
 }
 
 // buildRequest substitutes path args, collects set query flags, and merges
