@@ -387,6 +387,14 @@ func buildRequest(cmd *cli.Command, op spec.Operation, bindings []flagBinding, a
 
 	req := &apiRequest{Method: op.Method, Path: fillPath(op, args), Query: url.Values{}}
 
+	if cmd.String("data") == "-" {
+		for _, b := range bindings {
+			if b.inBody && cmd.IsSet(b.flag) && cmd.String(b.flag) == "@-" {
+				return nil, fmt.Errorf("--data - and --%s @- both read stdin, which can only be read once", b.flag)
+			}
+		}
+	}
+
 	body, err := readData(cmd.String("data"))
 	if err != nil {
 		return nil, err
@@ -395,11 +403,17 @@ func buildRequest(cmd *cli.Command, op spec.Operation, bindings []flagBinding, a
 		return nil, fmt.Errorf("%s takes no request body; remove --data", op.ID)
 	}
 
+	stdinUsed := cmd.String("data") == "-"
 	for _, b := range bindings {
 		if !cmd.IsSet(b.flag) {
 			continue
 		}
 		value := flagValue(cmd, b)
+		if text, ok := value.(string); ok && b.inBody && strings.HasPrefix(text, "@") {
+			if value, err = readFlagFile(b.flag, text, &stdinUsed); err != nil {
+				return nil, err
+			}
+		}
 		if b.inBody {
 			if body == nil {
 				body = map[string]any{}
@@ -513,6 +527,28 @@ func flagValue(cmd *cli.Command, b flagBinding) any {
 	default:
 		return cmd.String(b.flag)
 	}
+}
+
+// readFlagFile reads a string body flag given as @path or @- (stdin), like
+// --data. A missing file is an error rather than a literal "@…" value, so a
+// typo never sends the file name as text; values that really start with @
+// go through --data.
+func readFlagFile(flag, value string, stdinUsed *bool) (string, error) {
+	var raw []byte
+	var err error
+	if value == "@-" {
+		if *stdinUsed {
+			return "", fmt.Errorf("--%s @-: stdin can only be read once (already used by another flag)", flag)
+		}
+		*stdinUsed = true
+		raw, err = io.ReadAll(stdinReader)
+	} else {
+		raw, err = os.ReadFile(strings.TrimPrefix(value, "@"))
+	}
+	if err != nil {
+		return "", fmt.Errorf("--%s %s: %w (to send text starting with @, set it with --data)", flag, value, err)
+	}
+	return string(raw), nil
 }
 
 // readData parses --data: inline JSON, @path to a file, or - for stdin. The
