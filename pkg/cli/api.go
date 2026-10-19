@@ -314,6 +314,7 @@ func runOperation(ctx context.Context, cmd *cli.Command, op spec.Operation, bind
 		return failCmd(cmd, err)
 	}
 	numberAt := incidentNumberArg(op, args)
+	relatedNumber, relatedIsNumber := relatedToIncidentNumber(req.Body)
 
 	if cmd.Bool("dry-run") {
 		out := dryRunOutput{
@@ -322,9 +323,15 @@ func runOperation(ctx context.Context, cmd *cli.Command, op spec.Operation, bind
 			Query:  req.Query,
 			Body:   req.Body,
 		}
+		var notes []string
 		if numberAt >= 0 {
-			out.Note = fmt.Sprintf("incident number %s is resolved to its ID when sent", args[numberAt])
+			number, _ := incidentNumber(args[numberAt])
+			notes = append(notes, fmt.Sprintf("incident number %s is resolved to its ID when sent", number))
 		}
+		if relatedIsNumber {
+			notes = append(notes, fmt.Sprintf("related_to incident number %s is resolved to its ID when sent", relatedNumber))
+		}
+		out.Note = strings.Join(notes, "; ")
 		return outputJSON(os.Stdout, out)
 	}
 
@@ -338,12 +345,20 @@ func runOperation(ctx context.Context, cmd *cli.Command, op spec.Operation, bind
 	}
 
 	if numberAt >= 0 {
-		id, err := resolveIncidentNumber(ctx, client, args[numberAt])
+		number, _ := incidentNumber(args[numberAt])
+		id, err := resolveIncidentNumber(ctx, client, number)
 		if err != nil {
 			return failCmd(cmd, err)
 		}
 		args[numberAt] = id
 		req.Path = fillPath(op, args)
+	}
+	if relatedIsNumber {
+		id, err := resolveIncidentNumber(ctx, client, relatedNumber)
+		if err != nil {
+			return failCmd(cmd, err)
+		}
+		req.Body["related_to"] = "incident/" + id
 	}
 
 	var body []byte
@@ -416,15 +431,35 @@ func fillPath(op spec.Operation, args []string) string {
 }
 
 // incidentNumberArg returns the index of an incident_id arg given as an
-// incident number (all digits), or -1. Some endpoints accept numbers and some
-// silently return nothing for them, so the CLI resolves numbers itself.
+// incident number ("623" or "#623"), or -1. Some endpoints accept numbers and
+// some silently return nothing for them, so the CLI resolves numbers itself.
 func incidentNumberArg(op spec.Operation, args []string) int {
 	for i, p := range op.PathParams {
-		if p.Name == "incident_id" && i < len(args) && isAllDigits(args[i]) {
+		if p.Name != "incident_id" || i >= len(args) {
+			continue
+		}
+		if _, ok := incidentNumber(args[i]); ok {
 			return i
 		}
 	}
 	return -1
+}
+
+// incidentNumber parses an incident number written as "623" or "#623".
+func incidentNumber(s string) (string, bool) {
+	s = strings.TrimPrefix(s, "#")
+	return s, isAllDigits(s)
+}
+
+// relatedToIncidentNumber reports a body related_to of the form
+// "incident/<number>" (e.g. on create-ticket), which the API only accepts
+// with the incident's ID.
+func relatedToIncidentNumber(body map[string]any) (string, bool) {
+	ref, ok := body["related_to"].(string)
+	if !ok || !strings.HasPrefix(ref, "incident/") {
+		return "", false
+	}
+	return incidentNumber(strings.TrimPrefix(ref, "incident/"))
 }
 
 func isAllDigits(s string) bool {

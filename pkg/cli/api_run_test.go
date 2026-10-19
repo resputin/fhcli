@@ -521,3 +521,109 @@ func TestAPIDeleteRefusalHappensBeforeNumberLookup(t *testing.T) {
 		t.Errorf("err=%v stderr=%q, want the --yes refusal with no requests", err, stderr)
 	}
 }
+
+func TestAPIAcceptsHashIncidentNumber(t *testing.T) {
+	ts, paths := incidentServer(t, http.StatusOK)
+
+	_, _, err := runMini(t, ts.URL, "api", "incidents", "get-incident-role", "#623", "role-1")
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []string{"GET /v1/incidents/623", "GET /v1/incidents/uuid-623/roles/role-1"}
+	if !reflect.DeepEqual(*paths, want) {
+		t.Errorf("requests = %v, want %v", *paths, want)
+	}
+}
+
+// ticketServer resolves incident 623 and records each POSTed ticket body.
+func ticketServer(t *testing.T) (*httptest.Server, *[]map[string]any) {
+	t.Helper()
+	var bodies []map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/incidents/623":
+			w.Write([]byte(`{"id":"uuid-623","number":623}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/ticketing/tickets":
+			var b map[string]any
+			json.NewDecoder(r.Body).Decode(&b)
+			bodies = append(bodies, b)
+			w.WriteHeader(http.StatusCreated)
+			w.Write([]byte(`{"id":"ticket-1"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{}`))
+		}
+	}))
+	t.Cleanup(ts.Close)
+	return ts, &bodies
+}
+
+func TestAPIResolvesRelatedToIncidentNumber(t *testing.T) {
+	for _, ref := range []string{"incident/623", "incident/#623"} {
+		ts, bodies := ticketServer(t)
+
+		_, stderr, err := runCmdFull(t, ts.URL, "api", "ticketing", "create-ticket", "--summary", "Fix it", "--type", "follow_up", "--related-to", ref)
+
+		if err != nil {
+			t.Fatalf("%s: %v %s", ref, err, stderr)
+		}
+		if len(*bodies) != 1 || (*bodies)[0]["related_to"] != "incident/uuid-623" {
+			t.Errorf("%s: bodies = %v, want related_to incident/uuid-623", ref, *bodies)
+		}
+	}
+}
+
+func TestAPIResolvesRelatedToIncidentNumberInData(t *testing.T) {
+	ts, bodies := ticketServer(t)
+
+	_, stderr, err := runCmdFull(t, ts.URL, "api", "ticketing", "create-ticket", "--data", `{"summary":"Fix it","type":"follow_up","related_to":"incident/623"}`)
+
+	if err != nil {
+		t.Fatalf("%v %s", err, stderr)
+	}
+	if len(*bodies) != 1 || (*bodies)[0]["related_to"] != "incident/uuid-623" {
+		t.Errorf("bodies = %v", *bodies)
+	}
+}
+
+func TestAPIRelatedToIncidentIDPassesThrough(t *testing.T) {
+	ts, bodies := ticketServer(t)
+
+	_, _, err := runCmdFull(t, ts.URL, "api", "ticketing", "create-ticket", "--summary", "Fix it", "--related-to", "incident/7c89ed2d-91d9")
+
+	if err != nil || len(*bodies) != 1 || (*bodies)[0]["related_to"] != "incident/7c89ed2d-91d9" {
+		t.Errorf("err = %v, bodies = %v; a UUID reference must be sent unchanged", err, *bodies)
+	}
+}
+
+func TestAPIDryRunNotesRelatedToIncidentNumber(t *testing.T) {
+	stdout, _, err := runCmdFull(t, "http://127.0.0.1:1", "api", "ticketing", "create-ticket", "--summary", "Fix it", "--related-to", "incident/#623", "--dry-run")
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout, "incident number 623 is resolved to its ID when sent") {
+		t.Errorf("dry-run = %s, want a note that the number will be resolved", stdout)
+	}
+}
+
+func TestCuratedIncidentCommandsAcceptHashNumber(t *testing.T) {
+	var paths []string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"id":"uuid-623","number":623}`))
+	}))
+	t.Cleanup(ts.Close)
+
+	_, stderr, err := runCmdFull(t, ts.URL, "incidents", "get", "#623")
+
+	if err != nil {
+		t.Fatalf("%v %s", err, stderr)
+	}
+	if len(paths) == 0 || paths[0] != "/v1/incidents/623" {
+		t.Errorf("paths = %v, want /v1/incidents/623 (the # stripped)", paths)
+	}
+}
