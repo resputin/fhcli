@@ -128,23 +128,24 @@ func TestSearchScoresAreDescending(t *testing.T) {
 	}
 }
 
-// loadEmbeddedSpec returns the embedded spec, or the spec file named by
+// embeddedOrTestSpec returns the raw embedded spec, or the spec file named by
 // FHCLI_TEST_SPEC so the whole-spec tests can run against a freshly fetched
 // spec (e.g. `curl -o /tmp/live.json https://api.firehydrant.io/v1/swagger_doc`).
-func loadEmbeddedSpec(t *testing.T) *Spec {
+func embeddedOrTestSpec(t *testing.T) []byte {
 	t.Helper()
 	if path := os.Getenv("FHCLI_TEST_SPEC"); path != "" {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
 		}
-		s, err := Parse(data)
-		if err != nil {
-			t.Fatalf("FHCLI_TEST_SPEC %s: %v", path, err)
-		}
-		return s
+		return data
 	}
-	s, err := loadEmbedded()
+	return embedded
+}
+
+func loadEmbeddedSpec(t *testing.T) *Spec {
+	t.Helper()
+	s, err := Parse(embeddedOrTestSpec(t))
 	if err != nil {
 		t.Fatal(err)
 	}

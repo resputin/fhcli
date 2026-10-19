@@ -20,6 +20,7 @@ type Param struct {
 	ItemType    string // element type when Type is array
 	Required    bool
 	Enum        []string
+	Default     string // server-side default, "" when undocumented
 }
 
 // Scalar reports whether the param can be set from a single CLI flag.
@@ -52,6 +53,11 @@ type Operation struct {
 	// (paginated lists).
 	ResponseFields     []string
 	ResponseItemFields []string
+
+	// SeeAlso lists related operation IDs and Notes adds usage guidance the
+	// spec lacks; both come from the local overlay (overlay.go).
+	SeeAlso []string
+	Notes   []string
 }
 
 // Spec is the parsed set of operations.
@@ -85,6 +91,7 @@ type rawParam struct {
 	Type        string     `json:"type"`
 	Items       *rawSchema `json:"items"`
 	Enum        []any      `json:"enum"`
+	Default     any        `json:"default"`
 	Schema      *rawSchema `json:"schema"`
 }
 
@@ -94,6 +101,7 @@ type rawSchema struct {
 	Description string               `json:"description"`
 	Items       *rawSchema           `json:"items"`
 	Enum        []any                `json:"enum"`
+	Default     any                  `json:"default"`
 	Properties  map[string]rawSchema `json:"properties"`
 	Required    []string             `json:"required"`
 }
@@ -102,8 +110,19 @@ var httpMethods = []string{"get", "post", "put", "patch", "delete"}
 
 var pathParamPattern = regexp.MustCompile(`\{([^}]+)\}`)
 
-// Parse parses a Swagger 2.0 document into operations.
+// Parse parses a Swagger 2.0 document into operations and applies the local
+// overlay of known spec corrections.
 func Parse(data []byte) (*Spec, error) {
+	s, err := parse(data)
+	if err != nil {
+		return nil, err
+	}
+	applyOverlay(s, overlay)
+	return s, nil
+}
+
+// parse parses a Swagger 2.0 document into operations, without the overlay.
+func parse(data []byte) (*Spec, error) {
 	var raw rawSpec
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("parse spec: %w", err)
@@ -218,6 +237,7 @@ func (p rawParam) param() Param {
 		Type:        p.Type,
 		Required:    p.Required,
 		Enum:        enumStrings(p.Enum),
+		Default:     defaultString(p.Default),
 	}
 	if p.Items != nil {
 		out.ItemType = p.Items.Type
@@ -256,6 +276,7 @@ func (raw *rawSpec) bodyFields(schema rawSchema) []Param {
 			Type:        schemaType(prop),
 			Required:    required[name],
 			Enum:        enumStrings(prop.Enum),
+			Default:     defaultString(prop.Default),
 		}
 		if prop.Items != nil {
 			field.ItemType = schemaType(raw.resolve(*prop.Items))
@@ -283,6 +304,13 @@ func schemaType(s rawSchema) string {
 		return s.Type
 	}
 	return "object"
+}
+
+func defaultString(v any) string {
+	if v == nil {
+		return ""
+	}
+	return fmt.Sprint(v)
 }
 
 func enumStrings(values []any) []string {

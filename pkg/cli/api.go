@@ -46,6 +46,10 @@ func newAPICmd(sp *spec.Spec, loadErr error, run operationFunc) *cli.Command {
 	}
 
 	reserved := reservedFlagNames()
+	commands := make(map[string]string, len(sp.Operations))
+	for _, op := range sp.Operations {
+		commands[op.ID] = apiCommandLine(op)
+	}
 	groups := map[string]*cli.Command{}
 	for _, op := range sp.Operations {
 		name := commandName(op.Tag)
@@ -55,13 +59,20 @@ func newAPICmd(sp *spec.Spec, loadErr error, run operationFunc) *cli.Command {
 			groups[name] = group
 			cmd.Commands = append(cmd.Commands, group)
 		}
-		group.Commands = append(group.Commands, newOperationCmd(op, reserved, run))
+		group.Commands = append(group.Commands, newOperationCmd(op, reserved, run, commands))
 	}
 
 	return cmd
 }
 
-func newOperationCmd(op spec.Operation, reserved map[string]bool, run operationFunc) *cli.Command {
+// apiCommandLine is the `fhcli api` command that runs op.
+func apiCommandLine(op spec.Operation) string {
+	return "fhcli api " + commandName(op.Tag) + " " + commandName(op.ID)
+}
+
+// newOperationCmd builds the command for op. commands maps operation IDs to
+// their command lines, for the "See also" section.
+func newOperationCmd(op spec.Operation, reserved map[string]bool, run operationFunc, commands map[string]string) *cli.Command {
 	flags, bindings, dataOnly := operationFlags(op, reserved)
 
 	args := make([]string, len(op.PathParams))
@@ -83,6 +94,16 @@ func newOperationCmd(op spec.Operation, reserved map[string]bool, run operationF
 	}
 	if response := describeResponse(op); response != "" {
 		help = append(help, response)
+	}
+	help = append(help, op.Notes...)
+	var seeAlso []string
+	for _, id := range op.SeeAlso {
+		if line, ok := commands[id]; ok {
+			seeAlso = append(seeAlso, line)
+		}
+	}
+	if len(seeAlso) > 0 {
+		help = append(help, "See also: "+strings.Join(seeAlso, "; "))
 	}
 
 	return &cli.Command{
@@ -193,6 +214,9 @@ func newParamFlag(name string, p spec.Param) cli.Flag {
 	usage := p.Description
 	if len(p.Enum) > 0 {
 		usage += " (one of: " + strings.Join(p.Enum, ", ") + ")"
+	}
+	if p.Default != "" {
+		usage += " (server default: " + p.Default + ")"
 	}
 	if p.Required {
 		usage += " (required)"

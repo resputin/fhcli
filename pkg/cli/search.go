@@ -60,7 +60,7 @@ func searchHits(results []spec.Result) []searchHit {
 			args = append(args, p.Name)
 		}
 		hits = append(hits, searchHit{
-			Command: "fhcli api " + commandName(op.Tag) + " " + commandName(op.ID),
+			Command: apiCommandLine(op),
 			Args:    args,
 			Method:  op.Method,
 			Path:    op.Path,
