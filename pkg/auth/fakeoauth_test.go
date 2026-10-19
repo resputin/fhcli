@@ -139,16 +139,15 @@ func (f *fakeOAuth) currentUser(w http.ResponseWriter, r *http.Request) {
 }
 
 // followingBrowser simulates a browser: it GETs the authorize URL and
-// follows the redirect to the loopback callback.
-func followingBrowser(t *testing.T) func(string) error {
+// follows the redirect to the loopback callback. The request may outlive the
+// test (Login can return first, e.g. on access_denied), so it must not touch
+// t; a failed request just shows up as Login's result.
+func followingBrowser(_ *testing.T) func(string) error {
 	return func(u string) error {
 		go func() {
-			resp, err := http.Get(u)
-			if err != nil {
-				t.Logf("browser: %v", err)
-				return
+			if resp, err := http.Get(u); err == nil {
+				resp.Body.Close()
 			}
-			resp.Body.Close()
 		}()
 		return nil
 	}
