@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -46,6 +47,10 @@ func newAPICmd(sp *spec.Spec, loadErr error, run operationFunc) *cli.Command {
 	}
 
 	reserved := reservedFlagNames()
+	commands := make(map[string]string, len(sp.Operations))
+	for _, op := range sp.Operations {
+		commands[op.ID] = apiCommandLine(op)
+	}
 	groups := map[string]*cli.Command{}
 	for _, op := range sp.Operations {
 		name := commandName(op.Tag)
@@ -55,13 +60,20 @@ func newAPICmd(sp *spec.Spec, loadErr error, run operationFunc) *cli.Command {
 			groups[name] = group
 			cmd.Commands = append(cmd.Commands, group)
 		}
-		group.Commands = append(group.Commands, newOperationCmd(op, reserved, run))
+		group.Commands = append(group.Commands, newOperationCmd(op, reserved, run, commands))
 	}
 
 	return cmd
 }
 
-func newOperationCmd(op spec.Operation, reserved map[string]bool, run operationFunc) *cli.Command {
+// apiCommandLine is the `fhcli api` command that runs op.
+func apiCommandLine(op spec.Operation) string {
+	return "fhcli api " + commandName(op.Tag) + " " + commandName(op.ID)
+}
+
+// newOperationCmd builds the command for op. commands maps operation IDs to
+// their command lines, for the "See also" section.
+func newOperationCmd(op spec.Operation, reserved map[string]bool, run operationFunc, commands map[string]string) *cli.Command {
 	flags, bindings, dataOnly := operationFlags(op, reserved)
 
 	args := make([]string, len(op.PathParams))
@@ -83,6 +95,16 @@ func newOperationCmd(op spec.Operation, reserved map[string]bool, run operationF
 	}
 	if response := describeResponse(op); response != "" {
 		help = append(help, response)
+	}
+	help = append(help, op.Notes...)
+	var seeAlso []string
+	for _, id := range op.SeeAlso {
+		if line, ok := commands[id]; ok {
+			seeAlso = append(seeAlso, line)
+		}
+	}
+	if len(seeAlso) > 0 {
+		help = append(help, "See also: "+strings.Join(seeAlso, "; "))
 	}
 
 	return &cli.Command{
@@ -194,6 +216,9 @@ func newParamFlag(name string, p spec.Param) cli.Flag {
 	if len(p.Enum) > 0 {
 		usage += " (one of: " + strings.Join(p.Enum, ", ") + ")"
 	}
+	if p.Default != "" {
+		usage += " (server default: " + p.Default + ")"
+	}
 	if p.Required {
 		usage += " (required)"
 	}
@@ -290,6 +315,7 @@ func runOperation(ctx context.Context, cmd *cli.Command, op spec.Operation, bind
 		return failCmd(cmd, err)
 	}
 	numberAt := incidentNumberArg(op, args)
+	relatedNumber, relatedIsNumber := relatedToIncidentNumber(req.Body)
 
 	if cmd.Bool("dry-run") {
 		out := dryRunOutput{
@@ -298,9 +324,15 @@ func runOperation(ctx context.Context, cmd *cli.Command, op spec.Operation, bind
 			Query:  req.Query,
 			Body:   req.Body,
 		}
+		var notes []string
 		if numberAt >= 0 {
-			out.Note = fmt.Sprintf("incident number %s is resolved to its ID when sent", args[numberAt])
+			number, _ := incidentNumber(args[numberAt])
+			notes = append(notes, fmt.Sprintf("incident number %s is resolved to its ID when sent", number))
 		}
+		if relatedIsNumber {
+			notes = append(notes, fmt.Sprintf("related_to incident number %s is resolved to its ID when sent", relatedNumber))
+		}
+		out.Note = strings.Join(notes, "; ")
 		return outputJSON(os.Stdout, out)
 	}
 
@@ -314,12 +346,20 @@ func runOperation(ctx context.Context, cmd *cli.Command, op spec.Operation, bind
 	}
 
 	if numberAt >= 0 {
-		id, err := resolveIncidentNumber(ctx, client, args[numberAt])
+		number, _ := incidentNumber(args[numberAt])
+		id, err := resolveIncidentNumber(ctx, client, number)
 		if err != nil {
 			return failCmd(cmd, err)
 		}
 		args[numberAt] = id
 		req.Path = fillPath(op, args)
+	}
+	if relatedIsNumber {
+		id, err := resolveIncidentNumber(ctx, client, relatedNumber)
+		if err != nil {
+			return failCmd(cmd, err)
+		}
+		req.Body["related_to"] = "incident/" + id
 	}
 
 	var body []byte
@@ -331,9 +371,38 @@ func runOperation(ctx context.Context, cmd *cli.Command, op spec.Operation, bind
 
 	resp, err := client.do(ctx, req.Method, req.Path, req.Query, body)
 	if err != nil {
-		return failCmd(cmd, err)
+		return failCmd(cmd, withTimeoutHint(op, err))
 	}
 	return outputResult(cmd, resp)
+}
+
+// withTimeoutHint adds advice to a timed-out request (a 504/408 from the API
+// or a client-side timeout): narrow it with the operation's own date/time
+// filter flags when it has any, since slow list endpoints are usually
+// scanning too wide a window.
+func withTimeoutHint(op spec.Operation, err error) error {
+	var ae *apiError
+	var ne net.Error
+	timedOut := (errors.As(err, &ae) && (ae.status == http.StatusGatewayTimeout || ae.status == http.StatusRequestTimeout)) ||
+		(errors.As(err, &ne) && ne.Timeout()) || errors.Is(err, context.DeadlineExceeded)
+	if !timedOut {
+		return err
+	}
+	var filters []string
+	paginated := false
+	for _, p := range op.QueryParams {
+		if strings.Contains(p.Name, "date") || strings.Contains(p.Name, "time") || strings.HasPrefix(p.Name, "since") {
+			filters = append(filters, "--"+commandName(p.Name))
+		}
+		paginated = paginated || p.Name == "per_page"
+	}
+	switch {
+	case len(filters) > 0:
+		return fmt.Errorf("%w (the request timed out; narrow it with %s)", err, strings.Join(filters, ", "))
+	case paginated:
+		return fmt.Errorf("%w (the request timed out; try narrower filters or a smaller --per-page, then retry)", err)
+	}
+	return fmt.Errorf("%w (the request timed out; retry, and check status.firehydrant.com if it persists)", err)
 }
 
 // buildRequest substitutes path args, collects set query flags, and merges
@@ -348,6 +417,14 @@ func buildRequest(cmd *cli.Command, op spec.Operation, bindings []flagBinding, a
 
 	req := &apiRequest{Method: op.Method, Path: fillPath(op, args), Query: url.Values{}}
 
+	if cmd.String("data") == "-" {
+		for _, b := range bindings {
+			if b.inBody && cmd.IsSet(b.flag) && cmd.String(b.flag) == "@-" {
+				return nil, fmt.Errorf("--data - and --%s @- both read stdin, which can only be read once", b.flag)
+			}
+		}
+	}
+
 	body, err := readData(cmd.String("data"))
 	if err != nil {
 		return nil, err
@@ -356,11 +433,17 @@ func buildRequest(cmd *cli.Command, op spec.Operation, bindings []flagBinding, a
 		return nil, fmt.Errorf("%s takes no request body; remove --data", op.ID)
 	}
 
+	stdinUsed := cmd.String("data") == "-"
 	for _, b := range bindings {
 		if !cmd.IsSet(b.flag) {
 			continue
 		}
 		value := flagValue(cmd, b)
+		if text, ok := value.(string); ok && b.inBody && strings.HasPrefix(text, "@") {
+			if value, err = readFlagFile(b.flag, text, &stdinUsed); err != nil {
+				return nil, err
+			}
+		}
 		if b.inBody {
 			if body == nil {
 				body = map[string]any{}
@@ -392,15 +475,35 @@ func fillPath(op spec.Operation, args []string) string {
 }
 
 // incidentNumberArg returns the index of an incident_id arg given as an
-// incident number (all digits), or -1. Some endpoints accept numbers and some
-// silently return nothing for them, so the CLI resolves numbers itself.
+// incident number ("623" or "#623"), or -1. Some endpoints accept numbers and
+// some silently return nothing for them, so the CLI resolves numbers itself.
 func incidentNumberArg(op spec.Operation, args []string) int {
 	for i, p := range op.PathParams {
-		if p.Name == "incident_id" && i < len(args) && isAllDigits(args[i]) {
+		if p.Name != "incident_id" || i >= len(args) {
+			continue
+		}
+		if _, ok := incidentNumber(args[i]); ok {
 			return i
 		}
 	}
 	return -1
+}
+
+// incidentNumber parses an incident number written as "623" or "#623".
+func incidentNumber(s string) (string, bool) {
+	s = strings.TrimPrefix(s, "#")
+	return s, isAllDigits(s)
+}
+
+// relatedToIncidentNumber reports a body related_to of the form
+// "incident/<number>" (e.g. on create-ticket), which the API only accepts
+// with the incident's ID.
+func relatedToIncidentNumber(body map[string]any) (string, bool) {
+	ref, ok := body["related_to"].(string)
+	if !ok || !strings.HasPrefix(ref, "incident/") {
+		return "", false
+	}
+	return incidentNumber(strings.TrimPrefix(ref, "incident/"))
 }
 
 func isAllDigits(s string) bool {
@@ -454,6 +557,28 @@ func flagValue(cmd *cli.Command, b flagBinding) any {
 	default:
 		return cmd.String(b.flag)
 	}
+}
+
+// readFlagFile reads a string body flag given as @path or @- (stdin), like
+// --data. A missing file is an error rather than a literal "@…" value, so a
+// typo never sends the file name as text; values that really start with @
+// go through --data.
+func readFlagFile(flag, value string, stdinUsed *bool) (string, error) {
+	var raw []byte
+	var err error
+	if value == "@-" {
+		if *stdinUsed {
+			return "", fmt.Errorf("--%s @-: stdin can only be read once (already used by another flag)", flag)
+		}
+		*stdinUsed = true
+		raw, err = io.ReadAll(stdinReader)
+	} else {
+		raw, err = os.ReadFile(strings.TrimPrefix(value, "@"))
+	}
+	if err != nil {
+		return "", fmt.Errorf("--%s %s: %w (to send text starting with @, set it with --data)", flag, value, err)
+	}
+	return string(raw), nil
 }
 
 // readData parses --data: inline JSON, @path to a file, or - for stdin. The

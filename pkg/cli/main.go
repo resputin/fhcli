@@ -105,6 +105,7 @@ func newRootCmd(commit, version string, sp *spec.Spec, specErr error) *cli.Comma
 			newServicesCmd(),
 			newTeamsCmd(),
 			newAPICmd(sp, specErr, runOperation),
+			newSearchCmd(sp, specErr),
 			newSpecCmd(),
 			newLoginCmd(),
 			newLogoutCmd(),
@@ -131,7 +132,7 @@ func rootBefore(ctx context.Context, cmd *cli.Command) (context.Context, error) 
 		cmdName = cmd.Args().First()
 	}
 	switch cmdName {
-	case "init", "install", "spec", "login", "logout":
+	case "init", "install", "spec", "search", "login", "logout":
 		return ctx, nil
 	}
 

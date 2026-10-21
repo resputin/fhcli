@@ -165,6 +165,7 @@ As the user investigates, be proactive:
 The commands above cover the common incident workflow. For anything else, `fhcli api` exposes every public API operation, generated from FireHydrant's OpenAPI spec:
 
 ```
+fhcli search severity matrix                  # find the command for a task (offline, ranked)
 fhcli api --help                              # list API areas
 fhcli api incidents --help                    # list operations in an area
 fhcli api incidents list-incidents --help     # list an operation's flags
@@ -172,15 +173,31 @@ fhcli api incidents list-incidents --status open --per-page 5
 ```
 
 - Prefer a curated command above (`triage`, `context`, `note`, `update`, …) when one fits.
+- **To find an operation, run `fhcli search <what you want to do>` first** instead of browsing `--help`: area names follow the API's internals (the severity matrix is under `incident-settings`; status pages are the `nunc` operations). Each result gives the ready-to-run `command` and its positional `args`; then check `--help` on the one you pick.
 - Path parameters are positional arguments, in the order shown by `--help` (e.g. `<incident_id> <role_id>`).
-- Incidents can be referenced by number (e.g. `623`) anywhere an incident ID is expected — in the curated commands and in `fhcli api`, which resolves the number to the incident's ID before calling (some endpoints silently return nothing for a raw number).
+- Incidents can be referenced by number (`623` or `#623`) anywhere an incident ID is expected — in the curated commands and in `fhcli api`, which resolves the number to the incident's ID before calling (some endpoints silently return nothing for a raw number). This includes `--related-to incident/623` on `create-ticket`.
 - Simple body fields are flags. Nested fields go in `--data '{...}'`, `--data @file.json`, or `--data -` (stdin). Flags override keys in `--data`.
+- **Write long text to a file and pass it with `@`:** string body flags accept `--body @note.md`, `--description @desc.md`, or `@-` for stdin, so markdown, quotes and newlines need no shell escaping. A value starting with `@` whose file doesn't exist is an error; text that really starts with `@` goes through `--data`.
+- `--help` may end with notes and a "See also:" line (from fhcli's corrections to the API spec): follow them. For example, milestone slugs come from `fhcli api incident-settings list-lifecycle-phases`, and `--project-id` for tickets from `fhcli api ticketing list-ticketing-projects`.
 - An operation's `--help` ends with "Set these body fields with --data: …" listing the nested/complex body fields (with types and which are required) that have no flag.
 - Array flags split on commas (`--tags a,b` = two values); an element that itself contains a comma must go through `--data`.
 - **Before running any non-GET `fhcli api` command, run it with `--dry-run` and show the user the request.** Send it only after they agree.
 - DELETE operations refuse to run without `--yes`. **Never pass `--yes` unless the user explicitly confirmed that deletion in this conversation.**
 - An operation's `--help` ends with a "Response:" line listing the documented response fields (for lists, `data[] (…)` shows each item's fields) — use it to write `jq` filters without a probing call. It comes from the spec, so treat it as a guide, not a guarantee.
-- Responses are the API's raw JSON. Errors are JSON on stderr with a non-zero exit code.
+- Responses are the API's raw JSON. Errors are JSON on stderr with a non-zero exit code. A timeout (504) error names the date/time filter flags to narrow the request with — retry with a tighter window (e.g. `--start-datetime`) rather than the same request.
+- **Always pass `--visibility` explicitly on notes** (`private_to_org` unless the user asked for a public update): `open_to_public` is visible outside the organization.
+
+### Recipe: create follow-ups for an incident
+
+Follow-ups (action items) are tickets with type `follow_up`:
+
+1. `fhcli api ticketing list-ticketing-projects` — pick the project (e.g. the Jira-connected one) and note its `id`.
+2. Write each description to a file, then dry-run:
+   ```
+   fhcli api ticketing create-ticket --type follow_up --related-to incident/<number> \
+     --project-id <project id> --summary "…" --description @followup.md --dry-run
+   ```
+3. Show the user the request, send it after they agree, and read it back with `fhcli api ticketing get-ticket <id>`. Linked Jira issues are created by the integration within seconds; check `sync_error_message` on the ticket if one doesn't appear.
 
 ## Command reference
 
@@ -206,6 +223,7 @@ fhcli api incidents list-incidents --status open --per-page 5
 | `fhcli event <summary> [--environment E] [--service S] [--labels "k=v"]` | Submit a change event |
 | `fhcli execute <command> [--environment E] [--service S]` | Run a command and track as change event |
 | `fhcli api <area> <operation> [args] [--flags] [--data JSON] [--dry-run] [--yes]` | Call any public API operation |
+| `fhcli search <words...> [--limit N]` | Find the `fhcli api` command for a task |
 | `fhcli login [--region us\|eu\|au\|in\|staging] [--org ID] [--no-browser]` | Log in with the browser (user runs this, not the agent) |
 | `fhcli logout [--region R]` | Revoke and delete the stored login |
 | `fhcli whoami` | Show user, organization, region, and auth source |

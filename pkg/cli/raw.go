@@ -77,7 +77,7 @@ func (c *rawClient) do(ctx context.Context, method, path string, query url.Value
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, fmt.Errorf("%s %s: API returned %d: %s", method, path, resp.StatusCode, strings.TrimSpace(string(respBody)))
+		return nil, &apiError{method: method, path: path, status: resp.StatusCode, body: strings.TrimSpace(string(respBody))}
 	}
 	if len(bytes.TrimSpace(respBody)) == 0 {
 		return json.RawMessage("{}"), nil
@@ -86,4 +86,15 @@ func (c *rawClient) do(ctx context.Context, method, path string, query url.Value
 		return nil, fmt.Errorf("%s %s: API returned non-JSON body", method, path)
 	}
 	return respBody, nil
+}
+
+// apiError is a non-2xx API response.
+type apiError struct {
+	method, path string
+	status       int
+	body         string
+}
+
+func (e *apiError) Error() string {
+	return fmt.Sprintf("%s %s: API returned %d: %s", e.method, e.path, e.status, e.body)
 }

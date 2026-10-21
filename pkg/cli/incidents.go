@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 	"sync"
 
 	firehydrantgosdk "github.com/firehydrant/firehydrant-go-sdk"
@@ -241,7 +242,7 @@ func incidentsGetCmd(ctx context.Context, cmd *cli.Command) error {
 	if cmd.NArg() < 1 {
 		return failCmd(cmd, errors.New("incident ID is required"))
 	}
-	incidentID := cmd.Args().First()
+	incidentID := incidentArg(cmd)
 
 	resp, err := client.Incidents.GetIncident(ctx, incidentID)
 	if err != nil {
@@ -260,7 +261,7 @@ func incidentsNoteCmd(ctx context.Context, cmd *cli.Command) error {
 	if cmd.NArg() < 1 {
 		return failCmd(cmd, errors.New("incident ID is required"))
 	}
-	incidentID := cmd.Args().First()
+	incidentID := incidentArg(cmd)
 	body := cmd.String("body")
 
 	resp, err := client.Incidents.CreateIncidentNote(ctx, incidentID, components.CreateIncidentNote{
@@ -282,7 +283,7 @@ func incidentsChatCmd(ctx context.Context, cmd *cli.Command) error {
 	if cmd.NArg() < 1 {
 		return failCmd(cmd, errors.New("incident ID is required"))
 	}
-	incidentID := cmd.Args().First()
+	incidentID := incidentArg(cmd)
 	body := cmd.String("body")
 
 	resp, err := client.Incidents.CreateIncidentChatMessage(ctx, incidentID, components.CreateIncidentChatMessage{
@@ -304,7 +305,7 @@ func incidentsAlertsCmd(ctx context.Context, cmd *cli.Command) error {
 	if cmd.NArg() < 1 {
 		return failCmd(cmd, errors.New("incident ID is required"))
 	}
-	incidentID := cmd.Args().First()
+	incidentID := incidentArg(cmd)
 
 	resp, err := client.Alerts.ListIncidentAlerts(ctx, incidentID)
 	if err != nil {
@@ -323,7 +324,7 @@ func incidentsSummaryCmd(ctx context.Context, cmd *cli.Command) error {
 	if cmd.NArg() < 1 {
 		return failCmd(cmd, errors.New("incident ID is required"))
 	}
-	incidentID := cmd.Args().First()
+	incidentID := incidentArg(cmd)
 
 	resp, err := listAudienceSummaries(ctx, client, incidentID)
 	if err != nil {
@@ -349,7 +350,7 @@ func incidentsEventsCmd(ctx context.Context, cmd *cli.Command) error {
 	if cmd.NArg() < 1 {
 		return failCmd(cmd, errors.New("incident ID is required"))
 	}
-	incidentID := cmd.Args().First()
+	incidentID := incidentArg(cmd)
 
 	page := int(cmd.Int("page"))
 	perPage := int(cmd.Int("per-page"))
@@ -379,7 +380,7 @@ func incidentsTranscriptCmd(ctx context.Context, cmd *cli.Command) error {
 	if cmd.NArg() < 1 {
 		return failCmd(cmd, errors.New("incident ID is required"))
 	}
-	incidentID := cmd.Args().First()
+	incidentID := incidentArg(cmd)
 
 	query := url.Values{}
 	if s := cmd.String("sort"); s != "" {
@@ -403,7 +404,7 @@ func incidentsUpdateCmd(ctx context.Context, cmd *cli.Command) error {
 	if cmd.NArg() < 1 {
 		return failCmd(cmd, errors.New("incident ID is required"))
 	}
-	incidentID := cmd.Args().First()
+	incidentID := incidentArg(cmd)
 
 	update := components.UpdateIncident{}
 
@@ -437,7 +438,7 @@ func incidentsResolveCmd(ctx context.Context, cmd *cli.Command) error {
 	if cmd.NArg() < 1 {
 		return failCmd(cmd, errors.New("incident ID is required"))
 	}
-	incidentID := cmd.Args().First()
+	incidentID := incidentArg(cmd)
 
 	var reqBody *operations.ResolveIncidentRequestBody
 	if m := cmd.String("milestone"); m != "" {
@@ -467,7 +468,7 @@ func incidentsTriageCmd(ctx context.Context, cmd *cli.Command) error {
 	if cmd.NArg() < 1 {
 		return failCmd(cmd, errors.New("incident ID is required"))
 	}
-	incidentID := cmd.Args().First()
+	incidentID := incidentArg(cmd)
 
 	var (
 		mu     sync.Mutex
@@ -532,7 +533,7 @@ func incidentsContextCmd(ctx context.Context, cmd *cli.Command) error {
 	if cmd.NArg() < 1 {
 		return failCmd(cmd, errors.New("incident ID is required"))
 	}
-	incidentID := cmd.Args().First()
+	incidentID := incidentArg(cmd)
 
 	// Phase 1: Get the incident
 	incident, err := client.Incidents.GetIncident(ctx, incidentID)
@@ -691,4 +692,11 @@ func incidentsContextCmd(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	return outputResult(cmd, result)
+}
+
+// incidentArg is the incident ID argument, accepting "#623" for incident
+// number 623. The API resolves bare numbers itself; an unstripped "#" would
+// otherwise become a URL fragment and drop the ID from the request.
+func incidentArg(cmd *cli.Command) string {
+	return strings.TrimPrefix(cmd.Args().First(), "#")
 }
