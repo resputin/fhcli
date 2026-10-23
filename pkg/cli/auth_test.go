@@ -294,35 +294,24 @@ func TestConfigAPIHostDoesNotRedirectLogin(t *testing.T) {
 	}
 }
 
-func TestInitOmitsDefaultAPIHost(t *testing.T) {
+func TestInitWritesBareDefaultHostLikeV0015(t *testing.T) {
 	cfg := filepath.Join(t.TempDir(), "firehydrant.cfg")
 
 	if _, err := runCmdNoToken(t, "--config", cfg, "init", "--environment", "production"); err != nil {
 		t.Fatal(err)
 	}
 
+	// Older fhcli versions reading this file fail on an empty apiHost.
 	data, _ := os.ReadFile(cfg)
-	if strings.Contains(string(data), defaultAPIHost) {
-		t.Errorf("init wrote the default API host into the config:\n%s", data)
+	if !strings.Contains(string(data), "apiHost: api.firehydrant.io\n") {
+		t.Errorf("init should write the bare default host, as v0.0.15 did:\n%s", data)
 	}
 }
 
-func TestExecuteRunsCommandWhenAuthFails(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	marker := filepath.Join(t.TempDir(), "ran")
-
-	_, _, err := runRoot(t, NewRootCmd("test", "0.0.0-test"), "fhcli", "execute", "touch", marker)
-
-	if _, statErr := os.Stat(marker); statErr != nil {
-		t.Errorf("execute skipped the wrapped command when auth failed (err = %v)", err)
-	}
-	if err != nil {
-		t.Errorf("execute should exit 0 by default when only the change event fails, got %v", err)
-	}
-}
-
-func TestExecuteReturnsCommandFailureWhenAuthFails(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+func TestExecuteReturnsCommandFailureWithExpiredLogin(t *testing.T) {
+	srv := newAuthServer(t)
+	srv.refreshInvalid = true
+	storeLogin(t, loginCreds(srv.URL, time.Now().Add(-time.Minute)))
 
 	_, _, err := runRoot(t, NewRootCmd("test", "0.0.0-test"), "fhcli", "--ignore-errors=false", "execute", "false")
 

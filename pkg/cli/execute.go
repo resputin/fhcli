@@ -18,17 +18,22 @@ func newExecuteCmd() *cli.Command {
 		Name:   "execute",
 		Usage:  "execute a command and submit metrics to the FireHydrant API",
 		Action: executeCmd,
-		Flags:  sharedFlags,
+		Flags:  newSharedFlags(),
+		Before: applySharedConfig,
 	}
 }
 
 func executeCmd(ctx context.Context, cmd *cli.Command) error {
-	if cmd.NArg() < 1 {
-		return handleError(cmd, errors.New("no command passed"))
-	}
-	// Without credentials the command still runs; only the change event is
-	// skipped. Skipping a deploy because a login expired would be worse.
+	// As in v0.0.15, missing credentials or a missing command fail before
+	// anything runs. A stored login that can't be used (expired, unreadable)
+	// still lets the command run; only the change event is skipped.
 	client, clientErr := getClient(ctx)
+	if errors.Is(clientErr, errNoCredentials) {
+		return failCI(clientErr)
+	}
+	if cmd.NArg() < 1 {
+		return failCI(errors.New("No command passed"))
+	}
 
 	command := cmd.Args().First()
 	flags := cmd.Args().Tail()
@@ -36,9 +41,7 @@ func executeCmd(ctx context.Context, cmd *cli.Command) error {
 
 	identities := parseKV(cmd.String("identities"))
 
-	if cmd.Bool("interactive") {
-		fmt.Fprintf(os.Stderr, "Executing command %s with args %s\n", command, strings.Join(flags, " "))
-	}
+	fmt.Printf("Executing command %s with args %s\n", command, strings.Join(flags, " "))
 
 	cmdExec := exec.Command(command, flags...)
 	cmdExec.Stdout = os.Stdout
@@ -52,11 +55,9 @@ func executeCmd(ctx context.Context, cmd *cli.Command) error {
 
 	if cErr != nil {
 		identities["error"] = cErr.Error()
-		if cmd.Bool("interactive") {
-			fmt.Fprintf(os.Stderr, "Executed command, duration %dms, error: %s\n", duration, cErr)
-		}
-	} else if cmd.Bool("interactive") {
-		fmt.Fprintf(os.Stderr, "Executed command, duration %dms\n", duration)
+		fmt.Printf("Executed command, duration %dms, error: %s\n", duration, cErr)
+	} else {
+		fmt.Printf("Executed command, duration %dms\n", duration)
 	}
 
 	if clientErr != nil {
@@ -92,9 +93,7 @@ func executeCmd(ctx context.Context, cmd *cli.Command) error {
 		return handleError(cmd, err)
 	}
 
-	if err := outputResult(cmd, resp); err != nil {
-		return err
-	}
+	fmt.Printf("Created change event %s\n", stringValue(resp.ID))
 
 	if cErr != nil {
 		return handleError(cmd, cErr)

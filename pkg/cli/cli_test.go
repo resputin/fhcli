@@ -420,12 +420,13 @@ func TestExecuteCmdRequiresArgs(t *testing.T) {
 	defer ts.Close()
 
 	_, stderr, err := runCmdFull(t, ts.URL, "execute")
-	// With ignore-errors=true (default), execute stays CI-safe: exit 0, error on stderr
-	if err != nil {
-		t.Errorf("expected no error with ignore-errors default, got: %v", err)
+	// As in v0.0.15: a missing command is a usage error, so it exits
+	// non-zero regardless of --ignore-errors.
+	if err == nil {
+		t.Error("expected a non-zero exit when no command is passed")
 	}
-	if !strings.Contains(stderr, "no command passed") {
-		t.Errorf("expected 'no command passed' on stderr, got: %s", stderr)
+	if !strings.Contains(stderr, "No command passed") {
+		t.Errorf("expected 'No command passed' on stderr, got: %s", stderr)
 	}
 }
 

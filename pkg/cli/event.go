@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -14,12 +16,16 @@ func newEventCmd() *cli.Command {
 		Name:   "event",
 		Usage:  "submit a change event to the FireHydrant API",
 		Action: eventCmd,
-		Flags:  sharedFlags,
+		Flags:  newSharedFlags(),
+		Before: applySharedConfig,
 	}
 }
 
 func eventCmd(ctx context.Context, cmd *cli.Command) error {
 	client, err := getClient(ctx)
+	if errors.Is(err, errNoCredentials) {
+		return failCI(err)
+	}
 	if err != nil {
 		return handleError(cmd, err)
 	}
@@ -51,5 +57,13 @@ func eventCmd(ctx context.Context, cmd *cli.Command) error {
 		return handleError(cmd, err)
 	}
 
-	return outputResult(cmd, resp)
+	fmt.Printf("Created change event %s\n", stringValue(resp.ID))
+	return nil
+}
+
+func stringValue(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }

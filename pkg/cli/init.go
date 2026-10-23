@@ -2,7 +2,9 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"strings"
 
 	"github.com/urfave/cli/v3"
 	"gopkg.in/yaml.v2"
@@ -24,7 +26,7 @@ func newInitCmd() *cli.Command {
 		Name:   "init",
 		Usage:  "write a config file to be used in future invocations of the FireHydrant CLI",
 		Action: initCmd,
-		Flags:  sharedFlags,
+		Flags:  newSharedFlags(),
 	}
 }
 
@@ -38,8 +40,11 @@ func initCmd(ctx context.Context, cmd *cli.Command) error {
 	if v := cmd.String("token"); v != "" {
 		config.APIKey = v
 	}
-	if v := cmd.String("api-host"); v != "" && v != defaultAPIHost {
-		config.APIHost = v
+	// v0.0.15 always wrote a bare host (default api.firehydrant.io), and
+	// older binaries reading this file need it set.
+	config.APIHost = strings.TrimPrefix(strings.TrimPrefix(cmd.String("api-host"), "https://"), "http://")
+	if config.APIHost == "" {
+		config.APIHost = strings.TrimPrefix(defaultAPIHost, "https://")
 	}
 	config.Debug = cmd.Bool("debug")
 	config.IgnoreErrors = cmd.Bool("ignore-errors")
@@ -59,16 +64,14 @@ func initCmd(ctx context.Context, cmd *cli.Command) error {
 
 	d, err := yaml.Marshal(config)
 	if err != nil {
-		return handleError(cmd, err)
+		return failCI(err)
 	}
 
 	err = os.WriteFile(out, d, 0644)
 	if err != nil {
-		return handleError(cmd, err)
+		return failCI(err)
 	}
 
-	return outputResult(cmd, map[string]string{
-		"message": "Wrote config file " + out,
-		"path":    out,
-	})
+	fmt.Printf("Wrote config file %s\n", out)
+	return nil
 }

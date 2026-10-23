@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 
 	"github.com/firehydrant/fhcli/pkg/spec"
@@ -20,27 +21,32 @@ type ctxKey string
 
 const sdkClientKey ctxKey = "sdkClient"
 
-var sharedFlags = []cli.Flag{
-	&cli.StringFlag{
-		Name:    "identities",
-		Usage:   "identities for the event, comma separated. example: image=quay.io/firehydrant/rails:abcdef0",
-		Sources: cli.EnvVars("FH_IDENTITIES"),
-	},
-	&cli.StringFlag{
-		Name:    "labels",
-		Usage:   "labels for the event, comma separated. example: executor=jenkins",
-		Sources: cli.EnvVars("FH_LABELS"),
-	},
-	&cli.StringFlag{
-		Name:    "environment",
-		Usage:   "environment for the event, example: production",
-		Sources: cli.EnvVars("FH_ENVIRONMENT"),
-	},
-	&cli.StringFlag{
-		Name:    "service",
-		Usage:   "service for the event, example: rails-monolith",
-		Sources: cli.EnvVars("FH_SERVICE"),
-	},
+// newSharedFlags returns fresh change-event flags. Each command needs its
+// own: urfave/cli keeps parsed state on flag values, so sharing them across
+// command trees (as tests do) would make a flag look set when it isn't.
+func newSharedFlags() []cli.Flag {
+	return []cli.Flag{
+		&cli.StringFlag{
+			Name:    "identities",
+			Usage:   "identities for the event, comma separated. example: image=quay.io/firehydrant/rails:abcdef0",
+			Sources: cli.EnvVars("FH_IDENTITIES"),
+		},
+		&cli.StringFlag{
+			Name:    "labels",
+			Usage:   "labels for the event, comma separated. example: executor=jenkins",
+			Sources: cli.EnvVars("FH_LABELS"),
+		},
+		&cli.StringFlag{
+			Name:    "environment",
+			Usage:   "environment for the event, example: production",
+			Sources: cli.EnvVars("FH_ENVIRONMENT"),
+		},
+		&cli.StringFlag{
+			Name:    "service",
+			Usage:   "service for the event, example: rails-monolith",
+			Sources: cli.EnvVars("FH_SERVICE"),
+		},
+	}
 }
 
 // newGlobalFlags returns fresh root flags. Each root command needs its own:
@@ -184,96 +190,82 @@ func getClient(ctx context.Context) (*firehydrantgosdk.FireHydrant, error) {
 	return client, nil
 }
 
-// loadConfigFile reads the YAML config file and applies values for flags that are at their zero value.
-func loadConfigFile(cmd *cli.Command) {
+// Config file keys (as written by `fhcli init`) and the flags they set.
+// Root flags are applied once by rootBefore; the shared change-event flags
+// belong to the event and execute subcommands, so each applies them in its
+// own Before (see applySharedConfig).
+var (
+	rootConfigKeys = map[string]string{
+		"apiKey":       "token",
+		"apiHost":      "api-host",
+		"debug":        "debug",
+		"ignoreErrors": "ignore-errors",
+	}
+	sharedConfigKeys = map[string]string{
+		"identities":  "identities",
+		"labels":      "labels",
+		"environment": "environment",
+		"service":     "service",
+	}
+)
+
+// readConfigFile returns the first config file found: --config, then
+// /etc/firehydrant.cfg, ~/firehydrant.cfg, /tmp/firehydrant.cfg. A missing
+// or unreadable file is no config.
+func readConfigFile(cmd *cli.Command) map[string]any {
 	paths := []string{
 		cmd.String("config"),
 		path.Join("/etc", "firehydrant.cfg"),
 		path.Join(os.Getenv("HOME"), "firehydrant.cfg"),
 		path.Join("/tmp", "firehydrant.cfg"),
 	}
-
-	var cfgPath string
 	for _, p := range paths {
 		if p == "" {
 			continue
 		}
-		if _, err := os.Stat(p); err == nil {
-			cfgPath = p
-			break
-		}
-	}
-
-	if cfgPath == "" {
-		return
-	}
-
-	data, err := os.ReadFile(cfgPath)
-	if err != nil {
-		return
-	}
-
-	var cfg map[string]interface{}
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return
-	}
-
-	// Map config file keys to flag names
-	keyMap := map[string]string{
-		"apiKey":      "token",
-		"apiHost":     "api-host",
-		"debug":       "debug",
-		"identities":  "identities",
-		"labels":      "labels",
-		"environment": "environment",
-		"service":     "service",
-	}
-
-	for cfgKey, flagName := range keyMap {
-		val, ok := cfg[cfgKey]
-		if !ok || val == nil {
+		data, err := os.ReadFile(p)
+		if err != nil {
 			continue
 		}
-		// Only apply config values if the flag hasn't been set via CLI or env
-		if cmd.IsSet(flagName) {
+		var cfg map[string]any
+		if yaml.Unmarshal(data, &cfg) != nil {
+			return nil
+		}
+		return cfg
+	}
+	return nil
+}
+
+// applyConfig sets each flag in keys from cfg unless the flag was already set
+// on the command line or by an env var (both take precedence, as in v0.0.15).
+// Empty strings are skipped; booleans apply whether true or false.
+func applyConfig(cmd *cli.Command, cfg map[string]any, keys map[string]string) {
+	for key, flag := range keys {
+		val, ok := cfg[key]
+		if !ok || val == nil || cmd.IsSet(flag) {
 			continue
 		}
-		// Flags are already parsed, so set root flags (token, api-host,
-		// debug) directly; cmd.Set fails harmlessly for subcommand flags.
-		// The env var export covers subcommand flags, which are parsed later.
 		switch v := val.(type) {
 		case string:
 			if v != "" {
-				_ = cmd.Set(flagName, v)
-				os.Setenv(envForFlag(flagName), v)
+				_ = cmd.Set(flag, v)
 			}
 		case bool:
-			if v {
-				_ = cmd.Set(flagName, "true")
-				os.Setenv(envForFlag(flagName), "true")
-			}
+			_ = cmd.Set(flag, strconv.FormatBool(v))
 		}
 	}
 }
 
-// envForFlag returns the primary environment variable name for a flag.
-func envForFlag(flagName string) string {
-	switch flagName {
-	case "token":
-		return "FH_API_KEY"
-	case "api-host":
-		return "FH_API_HOST"
-	case "identities":
-		return "FH_IDENTITIES"
-	case "labels":
-		return "FH_LABELS"
-	case "environment":
-		return "FH_ENVIRONMENT"
-	case "service":
-		return "FH_SERVICE"
-	default:
-		return ""
-	}
+// loadConfigFile applies the config file's root flag values.
+func loadConfigFile(cmd *cli.Command) {
+	applyConfig(cmd, readConfigFile(cmd), rootConfigKeys)
+}
+
+// applySharedConfig is the Before hook of event and execute: it applies the
+// config file's identities, labels, environment and service to their flags.
+func applySharedConfig(ctx context.Context, cmd *cli.Command) (context.Context, error) {
+	applyConfig(cmd, readConfigFile(cmd), sharedConfigKeys)
+	return ctx, nil
 }
 
 // outputJSON writes data as JSON: indented when w is a terminal, one compact
@@ -316,16 +308,26 @@ func outputInteractive(w io.Writer, data any) error {
 	return err
 }
 
-// handleError reports an error and respects --ignore-errors. It is for the
-// change-event commands (event, execute, init), which default to exiting 0 so
-// a FireHydrant outage never fails a CI pipeline.
+// handleError reports an error the way v0.0.15 did and respects
+// --ignore-errors. It is for the change-event commands (event, execute,
+// init), which CI pipelines run: the message goes to stdout, and by default
+// the exit code is 0 so a FireHydrant outage never fails a pipeline.
 func handleError(cmd *cli.Command, err error) error {
-	reportError(cmd, err)
-
+	fmt.Println(withLoginHint(err).Error())
 	if cmd.Bool("ignore-errors") {
+		fmt.Println("ignoreErrors is set so exit code will be 0")
 		return nil
 	}
+	fmt.Fprintln(os.Stderr, withLoginHint(err).Error())
+	return err
+}
 
+// failCI fails a change-event command outright, before doing anything, the
+// way v0.0.15 did for configuration errors (no API key, no command): the
+// message goes to stderr and the exit code is non-zero regardless of
+// --ignore-errors, so a misconfigured pipeline is noticed.
+func failCI(err error) error {
+	fmt.Fprintln(os.Stderr, err.Error())
 	return err
 }
 
