@@ -49,6 +49,12 @@ const (
 var stopWords = map[string]bool{
 	"a": true, "an": true, "the": true, "for": true, "to": true, "of": true,
 	"and": true, "or": true, "in": true, "on": true, "by": true, "with": true,
+	// Filler from task-shaped questions ("who is on call", "how do I add a
+	// note"): these match nearly every description and would otherwise decide
+	// the ranking.
+	"is": true, "are": true, "was": true, "be": true, "do": true, "does": true,
+	"how": true, "what": true, "i": true, "me": true, "my": true, "we": true,
+	"our": true, "can": true,
 }
 
 // Search ranks operations against a free-text query and returns at most

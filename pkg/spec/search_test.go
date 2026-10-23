@@ -329,3 +329,19 @@ func TestSearchMatchesParameterDescriptionsAndEnums(t *testing.T) {
 		t.Errorf("param description search = %v", got)
 	}
 }
+
+// Natural-language questions shouldn't let filler words ("is", "how", "my")
+// decide the ranking: they match nearly every description.
+func TestSearchRealSpecIgnoresQuestionFillerWords(t *testing.T) {
+	s := loadEmbeddedSpec(t)
+
+	for q, id := range map[string]string{
+		"who is on call":                     "list_organization_on_call_schedules",
+		"list my incidents":                  "list_incidents",
+		"how do I add a note to an incident": "create_incident_note",
+	} {
+		if r := rank(s.Search(q, 0), id); r != 1 {
+			t.Errorf("search %q: %s ranked %d, want 1", q, id, r)
+		}
+	}
+}
