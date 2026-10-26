@@ -97,6 +97,9 @@ func NewRootCmd(commit, version string) *cli.Command {
 }
 
 func newRootCmd(commit, version string, sp *spec.Spec, specErr error) *cli.Command {
+	if version != "" {
+		cliVersion = version
+	}
 	cmd := &cli.Command{
 		Name:    "fhcli",
 		Usage:   "FireHydrant CLI",
@@ -131,6 +134,7 @@ func rootBefore(ctx context.Context, cmd *cli.Command) (context.Context, error) 
 	// Load config file values
 	loadConfigFile(cmd)
 	sawUnauthorized.Store(false)
+	currentAttribution.Store(&attribution{operation: commandPath(cmd, cmd.Args().Slice()), agent: detectAgent()})
 
 	// Skip auth for commands that don't call the API with it
 	cmdName := ""

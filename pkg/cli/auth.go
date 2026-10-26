@@ -69,7 +69,7 @@ func (u unauthorizedRecorder) RoundTrip(r *http.Request) (*http.Response, error)
 // apiHTTPClient is shared by the SDK and rawClient.
 var apiHTTPClient = &http.Client{
 	Timeout:   60 * time.Second,
-	Transport: unauthorizedRecorder{next: http.DefaultTransport},
+	Transport: unauthorizedRecorder{next: attributionTransport{next: http.DefaultTransport}},
 }
 
 func withLoginHint(err error) error {
