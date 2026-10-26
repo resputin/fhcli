@@ -140,13 +140,21 @@ func whoamiCmd(ctx context.Context, cmd *cli.Command) error {
 	if err := json.Unmarshal(body, &user); err != nil {
 		return failCmd(cmd, errors.New("unexpected /v1/current_user response"))
 	}
-	out := map[string]string{
+	out := map[string]any{
 		"source":          info.source,
 		"api_host":        info.apiHost,
 		"user":            user.Name,
 		"email":           user.Email,
 		"organization":    user.OrganizationName,
 		"organization_id": user.OrganizationID,
+	}
+	// What this run reports to FireHydrant's audit log.
+	if a := currentAttribution.Load(); a != nil {
+		client, agentInfo := a.report()
+		out["client"] = client
+		if agentInfo != nil {
+			out["agent"] = agentInfo
+		}
 	}
 	if info.creds != nil {
 		out["region"] = info.creds.Region

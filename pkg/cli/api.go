@@ -303,7 +303,10 @@ type dryRunOutput struct {
 	URL    string         `json:"url"`
 	Query  url.Values     `json:"query,omitempty"`
 	Body   map[string]any `json:"body,omitempty"`
-	Note   string         `json:"note,omitempty"`
+	// Headers are the attribution headers that would be sent. The
+	// Authorization header is never shown.
+	Headers map[string]string `json:"headers,omitempty"`
+	Note    string            `json:"note,omitempty"`
 }
 
 // runOperation builds the request for op and either prints it (--dry-run)
@@ -323,6 +326,13 @@ func runOperation(ctx context.Context, cmd *cli.Command, op spec.Operation, bind
 			URL:    requestHost(ctx, cmd) + req.Path,
 			Query:  req.Query,
 			Body:   req.Body,
+		}
+		if a := currentAttribution.Load(); a != nil {
+			h := a.headers()
+			out.Headers = map[string]string{}
+			for k := range h {
+				out.Headers[k] = h.Get(k)
+			}
 		}
 		var notes []string
 		if numberAt >= 0 {

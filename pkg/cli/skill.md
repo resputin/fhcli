@@ -183,6 +183,7 @@ fhcli api incidents list-incidents --status open --per-page 5
 - Array flags split on commas (`--tags a,b` = two values); an element that itself contains a comma must go through `--data`.
 - **Before running any non-GET `fhcli api` command, run it with `--dry-run` and show the user the request.** Send it only after they agree.
 - DELETE operations refuse to run without `--yes`. **Never pass `--yes` unless the user explicitly confirmed that deletion in this conversation.**
+- Actions you take are attributed to your agent in the FireHydrant audit log. State the reason for a change in the note or description you post.
 - An operation's `--help` ends with a "Response:" line listing the documented response fields (for lists, `data[] (…)` shows each item's fields) — use it to write `jq` filters without a probing call. It comes from the spec, so treat it as a guide, not a guarantee.
 - Responses are the API's raw JSON. Errors are JSON on stderr with a non-zero exit code. A timeout (504) error names the date/time filter flags to narrow the request with — retry with a tighter window (e.g. `--start-datetime`) rather than the same request.
 - **Always pass `--visibility` explicitly on notes** (`private_to_org` unless the user asked for a public update): `open_to_public` is visible outside the organization.

@@ -69,6 +69,31 @@ func (a *attribution) headers() http.Header {
 	return h
 }
 
+// report is the attribution as whoami shows it.
+func (a *attribution) report() (client map[string]any, agentInfo map[string]any) {
+	client = map[string]any{"name": "fhcli", "version": cliVersion, "invocation_id": invocationID}
+	info := a.agent
+	if info.Disabled {
+		return client, map[string]any{"detection": "disabled"}
+	}
+	if info.Name == "" {
+		return client, nil
+	}
+	agentInfo = map[string]any{}
+	for k, v := range map[string]string{
+		"name": info.Name, "version": info.Version, "surface": info.Surface, "confidence": string(info.Confidence),
+		"source": info.Source, "raw": info.Raw, "session_id": info.SessionID, "traceparent": info.Traceparent,
+	} {
+		if v != "" {
+			agentInfo[k] = v
+		}
+	}
+	if info.Attended != nil {
+		agentInfo["attended"] = *info.Attended
+	}
+	return client, agentInfo
+}
+
 // agentHeader formats X-FH-Agent as "key=value; …", omitting empty values
 // and any the server would reject.
 func agentHeader(info agent.Info) string {

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 
@@ -186,5 +188,30 @@ func TestCommandPathStopsAtFirstNonCommand(t *testing.T) {
 		if got := commandPath(root, argv); got != want {
 			t.Errorf("commandPath(%q) = %q, want %q", argv, got, want)
 		}
+	}
+}
+
+func TestDryRunShowsAttributionHeaders(t *testing.T) {
+	withAgent(t, claudeCode)
+	ts := failIfCalled(t)
+
+	out, _, err := runMini(t, ts.URL, "api", "incidents", "create-incident", "--name", "DB down", "--dry-run")
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var d struct {
+		Headers map[string]string `json:"headers"`
+	}
+	if err := json.Unmarshal([]byte(out), &d); err != nil {
+		t.Fatalf("dry-run output is not JSON: %v\n%s", err, out)
+	}
+	if d.Headers["X-Fh-Operation"] != "api incidents create-incident" ||
+		d.Headers["X-Fh-Agent-Session"] != claudeCode.SessionID ||
+		!strings.HasSuffix(d.Headers["User-Agent"], "Agent/claude-code") {
+		t.Errorf("headers = %v", d.Headers)
+	}
+	if _, ok := d.Headers["Authorization"]; ok {
+		t.Error("dry-run must not print the Authorization header")
 	}
 }

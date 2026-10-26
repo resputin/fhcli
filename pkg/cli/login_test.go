@@ -9,10 +9,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/firehydrant/fhcli/pkg/agent"
 	"github.com/firehydrant/fhcli/pkg/auth"
 )
 
@@ -202,13 +204,72 @@ func TestWhoamiWithAPIToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var out map[string]string
+	var out map[string]any
 	json.Unmarshal([]byte(stdout), &out)
-	if out["source"] != "api_token" || out["user"] != "Dylan" || out["region"] != "" {
+	if out["source"] != "api_token" || out["user"] != "Dylan" || out["region"] != nil {
 		t.Errorf("whoami = %s", stdout)
 	}
 	if strings.Contains(stdout, "test-token") {
 		t.Error("whoami must not print the API token")
+	}
+}
+
+func TestWhoamiReportsAttribution(t *testing.T) {
+	srv := newOAuthServer(t)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	withAgent(t, claudeCode)
+
+	stdout, err := runCmd(t, srv.URL, "whoami")
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		Client map[string]any `json:"client"`
+		Agent  map[string]any `json:"agent"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &out); err != nil {
+		t.Fatalf("whoami output is not JSON: %v\n%s", err, stdout)
+	}
+	if out.Client["name"] != "fhcli" || out.Client["version"] != "0.0.0-test" || out.Client["invocation_id"] != invocationID {
+		t.Errorf("client = %v", out.Client)
+	}
+	want := map[string]any{
+		"name": "claude-code", "version": "2.1.309", "confidence": "high", "source": "AI_AGENT",
+		"raw": "claude-code_2-1-309_agent", "session_id": "0b8f5e2a-1c3d-4e5f-8a9b-0c1d2e3f4a5b", "attended": false,
+		"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+	}
+	if !reflect.DeepEqual(out.Agent, want) {
+		t.Errorf("agent = %v\nwant    %v", out.Agent, want)
+	}
+}
+
+func TestWhoamiAgentWhenNoneOrDisabled(t *testing.T) {
+	srv := newOAuthServer(t)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	for _, tc := range []struct {
+		name string
+		info agent.Info
+		want any
+	}{
+		{"none", agent.Info{}, nil},
+		{"disabled", agent.Info{Disabled: true, Source: "FHCLI_AGENT"}, map[string]any{"detection": "disabled"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withAgent(t, tc.info)
+
+			stdout, err := runCmd(t, srv.URL, "whoami")
+
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out map[string]any
+			json.Unmarshal([]byte(stdout), &out)
+			if !reflect.DeepEqual(out["agent"], tc.want) {
+				t.Errorf("agent = %v, want %v", out["agent"], tc.want)
+			}
+		})
 	}
 }
 
