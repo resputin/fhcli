@@ -371,6 +371,12 @@ func reportError(cmd *cli.Command, err error) {
 // .response.detail without unescaping the message.
 func errorOutput(err error) map[string]any {
 	out := map[string]any{"error": err.Error()}
+	var mi *missingInputsError
+	if errors.As(err, &mi) {
+		out["missing"] = mi.missing
+		out["example"] = mi.example
+		return out
+	}
 	var ae *apiError
 	if !errors.As(err, &ae) {
 		return out

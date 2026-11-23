@@ -75,7 +75,10 @@ var overlay = []overlayEntry{
 		// zone unless rotations are given; a request without one passes
 		// --dry-run and fails with a 500.
 		Operation: "create_team_on_call_schedule",
-		SeeAlso:   []string{"create_team_escalation_policy", "list_team_on_call_schedules"},
+		Fields: map[string]fieldFix{
+			"time_zone": {RequiredUnless: "rotations"},
+		},
+		SeeAlso: []string{"create_team_escalation_policy", "list_team_on_call_schedules"},
 		Notes: []string{
 			"Required unless rotations is given: --time-zone (an IANA name, e.g. America/Los_Angeles). Omitting it returns a 500, not a 422.",
 			"A weekly strategy ignores --start-time: the first shift is the most recent handoff, and the first member listed is first on call.",
@@ -98,10 +101,12 @@ type overlayEntry struct {
 	Notes     []string
 }
 
-// fieldFix replaces a parameter's documented type and/or enum.
+// fieldFix replaces a parameter's documented type and/or enum, or marks it
+// required unless another body field is given.
 type fieldFix struct {
-	Type string
-	Enum []string
+	Type           string
+	Enum           []string
+	RequiredUnless string
 }
 
 // applyOverlay patches s in place. Entries for operations or fields the spec
@@ -131,6 +136,9 @@ func applyOverlay(s *Spec, entries []overlayEntry) {
 				}
 				if len(fix.Enum) > 0 && len(group[j].Enum) == 0 {
 					group[j].Enum = fix.Enum
+				}
+				if fix.RequiredUnless != "" && !group[j].Required {
+					group[j].RequiredUnless = fix.RequiredUnless
 				}
 			}
 		}

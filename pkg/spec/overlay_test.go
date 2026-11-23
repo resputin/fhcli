@@ -102,6 +102,9 @@ func TestOverlayEntriesAreNeeded(t *testing.T) {
 			if fix.Type != "" && p.Type == fix.Type {
 				t.Errorf("overlay %s.%s: spec already types it %s; remove the override", e.Operation, name, fix.Type)
 			}
+			if fix.RequiredUnless != "" && p.Required {
+				t.Errorf("overlay %s.%s: spec now marks it required; remove the override", e.Operation, name)
+			}
 			if len(fix.Enum) > 0 && len(p.Enum) > 0 {
 				t.Errorf("overlay %s.%s: spec now has enum %v; remove the override", e.Operation, name, p.Enum)
 			}
@@ -116,5 +119,15 @@ func TestOverlaySkipsMissingOperations(t *testing.T) {
 
 	if len(s.Operations[0].Notes) != 0 {
 		t.Error("an overlay entry for a missing operation must be ignored, not applied elsewhere")
+	}
+}
+
+func TestOverlayMarksOnCallTimeZoneRequiredUnlessRotations(t *testing.T) {
+	s := loadEmbeddedSpec(t)
+
+	tz := findField(t, findOp(t, s, "create_team_on_call_schedule"), "time_zone")
+
+	if tz.Required || tz.RequiredUnless != "rotations" {
+		t.Errorf("time_zone Required=%v RequiredUnless=%q, want false and rotations", tz.Required, tz.RequiredUnless)
 	}
 }

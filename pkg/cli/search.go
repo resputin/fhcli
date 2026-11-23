@@ -82,12 +82,12 @@ func requiredInputs(op spec.Operation, reserved map[string]bool) []string {
 	_, bindings, dataOnly := operationFlags(op, reserved)
 	required := []string{}
 	for _, b := range bindings {
-		if b.param.Required {
+		if b.param.Required || b.param.RequiredUnless != "" {
 			required = append(required, "--"+b.flag)
 		}
 	}
 	for _, p := range dataOnly {
-		if p.Required {
+		if p.Required || p.RequiredUnless != "" {
 			required = append(required, "data."+p.Name)
 		}
 	}

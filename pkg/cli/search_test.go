@@ -183,6 +183,7 @@ func TestEverySearchHitIsARunnableCommand(t *testing.T) {
 			argv = append(argv, value)
 			wantPath = strings.ReplaceAll(wantPath, "{"+a+"}", value)
 		}
+		argv = append(argv, requiredInputArgs(op, hit.Required)...)
 		argv = append(argv, "--dry-run")
 
 		stdout, stderr, err := runRoot(t, NewRootCmd("test", "0.0.0-test"), argv...)
@@ -203,4 +204,41 @@ func TestEverySearchHitIsARunnableCommand(t *testing.T) {
 			t.Errorf("%s: unsubstituted path param in %s", hit.Command, got.URL)
 		}
 	}
+}
+
+// requiredInputArgs returns flags and --data that satisfy an operation's
+// required inputs with placeholder values (the request is only previewed).
+func requiredInputArgs(op spec.Operation, required []string) []string {
+	var args []string
+	data := map[string]any{}
+	for _, r := range required {
+		if field, ok := strings.CutPrefix(r, "data."); ok {
+			data[field] = "x"
+			continue
+		}
+		value := "x"
+		for _, group := range [][]spec.Param{op.QueryParams, op.BodyFields} {
+			for _, p := range group {
+				if "--"+commandName(p.Name) != r {
+					continue
+				}
+				switch p.Type {
+				case "integer", "number":
+					value = "1"
+				case "boolean":
+					value = "=true"
+				}
+			}
+		}
+		if value == "=true" {
+			args = append(args, r+value)
+			continue
+		}
+		args = append(args, r, value)
+	}
+	if len(data) > 0 {
+		b, _ := json.Marshal(data)
+		args = append(args, "--data", string(b))
+	}
+	return args
 }
