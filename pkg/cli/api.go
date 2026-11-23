@@ -223,6 +223,8 @@ func newParamFlag(name string, p spec.Param, inBody bool) cli.Flag {
 	}
 	if p.Required {
 		usage += " (required)"
+	} else if p.RequiredUnless != "" {
+		usage += " (required unless " + p.RequiredUnless + " is given)"
 	}
 	if inBody && isTextParam(p) {
 		usage += " (accepts @file, or @- for stdin)"
@@ -323,6 +325,26 @@ type dryRunOutput struct {
 	Note    string            `json:"note,omitempty"`
 }
 
+// printDryRun prints req as it would be sent (attribution headers included,
+// Authorization never) and sends nothing.
+func printDryRun(ctx context.Context, cmd *cli.Command, req *apiRequest, note string) error {
+	out := dryRunOutput{
+		Method: req.Method,
+		URL:    requestHost(ctx, cmd) + req.Path,
+		Query:  req.Query,
+		Body:   req.Body,
+		Note:   note,
+	}
+	if a := currentAttribution.Load(); a != nil {
+		h := a.headers()
+		out.Headers = map[string]string{}
+		for k := range h {
+			out.Headers[k] = h.Get(k)
+		}
+	}
+	return outputJSON(os.Stdout, out)
+}
+
 // runOperation builds the request for op and either prints it (--dry-run)
 // or sends it. DELETE operations require --yes.
 func runOperation(ctx context.Context, cmd *cli.Command, op spec.Operation, bindings []flagBinding) error {
@@ -335,19 +357,6 @@ func runOperation(ctx context.Context, cmd *cli.Command, op spec.Operation, bind
 	relatedNumber, relatedIsNumber := relatedToIncidentNumber(req.Body)
 
 	if cmd.Bool("dry-run") {
-		out := dryRunOutput{
-			Method: req.Method,
-			URL:    requestHost(ctx, cmd) + req.Path,
-			Query:  req.Query,
-			Body:   req.Body,
-		}
-		if a := currentAttribution.Load(); a != nil {
-			h := a.headers()
-			out.Headers = map[string]string{}
-			for k := range h {
-				out.Headers[k] = h.Get(k)
-			}
-		}
 		var notes []string
 		if numberAt >= 0 {
 			number, _ := incidentNumber(args[numberAt])
@@ -356,8 +365,7 @@ func runOperation(ctx context.Context, cmd *cli.Command, op spec.Operation, bind
 		if relatedIsNumber {
 			notes = append(notes, fmt.Sprintf("related_to incident number %s is resolved to its ID when sent", relatedNumber))
 		}
-		out.Note = strings.Join(notes, "; ")
-		return outputJSON(os.Stdout, out)
+		return printDryRun(ctx, cmd, req, strings.Join(notes, "; "))
 	}
 
 	if req.Method == http.MethodDelete && !cmd.Bool("yes") {
@@ -497,7 +505,69 @@ func buildRequest(cmd *cli.Command, op spec.Operation, bindings []flagBinding, a
 	}
 
 	req.Body = body
+	if err := checkRequired(op, bindings, req); err != nil {
+		return nil, err
+	}
 	return req, nil
+}
+
+// missingInputsError is a request that lacks inputs the operation can't be
+// sent without. It is raised before anything is sent: the API either rejects
+// these with an unhelpful 400 or, for some, fails with a 500.
+type missingInputsError struct {
+	op      spec.Operation
+	missing []string // "--flag" or "data.field"
+	example string
+}
+
+func (e *missingInputsError) Error() string {
+	return fmt.Sprintf("%s is missing required input: %s. Example: %s",
+		commandName(e.op.ID), strings.Join(e.missing, ", "), e.example)
+}
+
+// checkRequired reports required query params and top-level body fields that
+// are not set, via a flag or --data. Nested required fields are left to the API.
+func checkRequired(op spec.Operation, bindings []flagBinding, req *apiRequest) error {
+	flagFor := make(map[string]string, len(bindings))
+	for _, b := range bindings {
+		flagFor[b.param.Name] = "--" + b.flag
+	}
+	var missing, parts []string
+	note := func(p spec.Param) {
+		if flag, ok := flagFor[p.Name]; ok {
+			missing = append(missing, flag)
+			parts = append(parts, flag+" <"+p.Name+">")
+			return
+		}
+		missing = append(missing, "data."+p.Name)
+		parts = append(parts, fmt.Sprintf("--data '{%q: ...}'", p.Name))
+	}
+	for _, p := range op.QueryParams {
+		if p.Required && !req.Query.Has(p.Name) && !req.Query.Has(arrayQueryKey(p.Name)) {
+			note(p)
+		}
+	}
+	for _, p := range op.BodyFields {
+		if strings.ContainsAny(p.Name, "[]") {
+			continue
+		}
+		_, given := req.Body[p.Name]
+		_, unlessGiven := req.Body[p.RequiredUnless]
+		if given || (p.RequiredUnless != "" && unlessGiven) {
+			continue
+		}
+		if p.Required || p.RequiredUnless != "" {
+			note(p)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	example := apiCommandLine(op)
+	for _, p := range op.PathParams {
+		example += " <" + p.Name + ">"
+	}
+	return &missingInputsError{op: op, missing: missing, example: example + " " + strings.Join(parts, " ")}
 }
 
 // fillPath substitutes positional args into the operation's path template.

@@ -19,8 +19,12 @@ type Param struct {
 	Type        string // string | integer | number | boolean | array | object | file
 	ItemType    string // element type when Type is array
 	Required    bool
-	Enum        []string
-	Default     string // server-side default, "" when undocumented
+	// RequiredUnless names a sibling body field that makes this one optional
+	// when given (e.g. time_zone is required unless rotations is). Set by the
+	// overlay, for rules the published spec can't express.
+	RequiredUnless string
+	Enum           []string
+	Default        string // server-side default, "" when undocumented
 }
 
 // Scalar reports whether the param can be set from a single CLI flag.

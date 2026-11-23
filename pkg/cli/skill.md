@@ -181,12 +181,13 @@ fhcli api incidents list-incidents --status open --per-page 5
 - `--help` may end with notes and a "See also:" line (from fhcli's corrections to the API spec): follow them. For example, milestone slugs come from `fhcli api incident-settings list-lifecycle-phases`, and `--project-id` for tickets from `fhcli api ticketing list-ticketing-projects`.
 - An operation's `--help` ends with "Set these body fields with --data: …" listing the nested/complex body fields (with types and which are required) that have no flag.
 - Array flags split on commas (`--tags a,b` = two values); an element that itself contains a comma must go through `--data`.
-- **Before running any non-GET `fhcli api` command, run it with `--dry-run` and show the user the request.** Send it only after they agree.
+- **Before running any non-GET `fhcli api` command, run it with `--dry-run` and show the user the request.** Send it only after they agree. The curated writes (`incidents note`, `chat`, `update`, `resolve`) take `--dry-run` too and print the request they would send.
+- A call missing a required input fails before anything is sent (also under `--dry-run`): stderr is `{"error": …, "missing": ["--name", …], "example": "fhcli api … --name <name>"}`. Ask the user for the missing values (don't invent them), then re-run with them.
 - DELETE operations refuse to run without `--yes`. **Never pass `--yes` unless the user explicitly confirmed that deletion in this conversation.**
 - Actions you take are attributed to your agent in the FireHydrant audit log. State the reason for a change in the note or description you post.
 - An operation's `--help` ends with a "Response:" line listing the documented response fields (for lists, `data[] (…)` shows each item's fields) — use it to write `jq` filters without a probing call. It comes from the spec, so treat it as a guide, not a guarantee.
 - Responses are the API's raw JSON. Errors are JSON on stderr with a non-zero exit code: `error` is the message, and an API failure adds `status`, `method`, `path` and `response` (the API's error body, parsed), so branch on `.status` (e.g. 404 = not found or not visible to this org) and read `.response.detail`. A timeout (504) error names the date/time filter flags to narrow the request with — retry with a tighter window (e.g. `--start-datetime`) rather than the same request.
-- **Always pass `--visibility` explicitly on notes** (`private_to_org` unless the user asked for a public update): `open_to_public` is visible outside the organization.
+- **Always pass `--visibility` explicitly on notes** (`private_to_org` unless the user asked for a public update): `open_to_public` is visible outside the organization. `incidents note` takes `--visibility` too; `--dry-run` shows the visibility it will send.
 
 ### Recipe: comment on an alert
 
@@ -212,7 +213,7 @@ Follow-ups (action items) are tickets with type `follow_up`:
 Three writes, each feeding the next. Dry-run every one and send after the user agrees:
 
 1. Find people: `fhcli users find robert@example.com` — prints `id`, `name`, `email`; an exact email match returns one user. Create the team with `fhcli api teams create-team --name "…" --data '{"memberships":[{"user_id":"<id>"}]}' --dry-run`, and note the team `id`.
-2. Schedule: `fhcli api signals create-team-on-call-schedule <team_id> --name "…" --time-zone America/Los_Angeles --rotation-name "…" --data '{"strategy":{"type":"weekly","handoff_day":"monday","handoff_time":"09:00"},"members":[{"id":"<user id>"}]}' --dry-run`. `--time-zone` is required unless `rotations` is given; leaving it out passes `--dry-run` but fails with a 500. A weekly rotation starts on the most recent handoff, and the first member listed is first on call. Note the schedule `id`.
+2. Schedule: `fhcli api signals create-team-on-call-schedule <team_id> --name "…" --time-zone America/Los_Angeles --rotation-name "…" --data '{"strategy":{"type":"weekly","handoff_day":"monday","handoff_time":"09:00"},"members":[{"id":"<user id>"}]}' --dry-run`. `--time-zone` is required unless `rotations` is given; fhcli refuses to send the request without it (the API itself would fail with a 500). A weekly rotation starts on the most recent handoff, and the first member listed is first on call. Note the schedule `id`.
 3. Escalation policy: `fhcli api signals create-team-escalation-policy <team_id> --name "…" --data '{"steps":[{"timeout":"PT15M","targets":[{"id":"<schedule id>","type":"OnCallSchedule"}]}]}' --dry-run`.
 4. Read back with `fhcli api signals get-team-on-call-schedule <team_id> <schedule_id>` and check the shifts.
 
@@ -228,10 +229,10 @@ If a create returns a 5xx, nothing is confirmed either way: list the team's sche
 | `fhcli incidents summary <id>` | Get AI-generated audience summaries |
 | `fhcli incidents events <id> [--types T] [--page N] [--per-page N]` | List timeline events |
 | `fhcli incidents transcript <id> [--sort asc\|desc]` | List call transcript entries |
-| `fhcli incidents note <id> --body "..."` | Post a status update note |
-| `fhcli incidents chat <id> --body "..."` | Post a chat message |
-| `fhcli incidents update <id> [--severity S] [--summary S] [--priority P] [--description D]` | Update incident fields |
-| `fhcli incidents resolve <id> [--milestone M]` | Resolve an incident |
+| `fhcli incidents note <id> --body "..." [--visibility V] [--dry-run]` | Post a status update note |
+| `fhcli incidents chat <id> --body "..." [--dry-run]` | Post a chat message |
+| `fhcli incidents update <id> [--severity S] [--summary S] [--priority P] [--description D] [--dry-run]` | Update incident fields |
+| `fhcli incidents resolve <id> [--milestone M] [--dry-run]` | Resolve an incident |
 | `fhcli incidents triage <id>` | Get incident + alerts + summaries in one call |
 | `fhcli incidents context <id>` | Get incident with enriched services and teams |
 | `fhcli services list [--query Q] [--page N] [--per-page N]` | List/search services |

@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -95,6 +97,11 @@ func newIncidentsCmd() *cli.Command {
 						Usage:    "note body text",
 						Required: true,
 					},
+					&cli.StringFlag{
+						Name:  "visibility",
+						Usage: "who can see the note: private_to_org (default) or open_to_public (visible outside your organization)",
+					},
+					&cli.BoolFlag{Name: "dry-run", Usage: "print the request instead of sending it"},
 				},
 			},
 			{
@@ -108,6 +115,7 @@ func newIncidentsCmd() *cli.Command {
 						Usage:    "message body text",
 						Required: true,
 					},
+					&cli.BoolFlag{Name: "dry-run", Usage: "print the request instead of sending it"},
 				},
 			},
 			{
@@ -174,6 +182,7 @@ func newIncidentsCmd() *cli.Command {
 						Name:  "description",
 						Usage: "incident description",
 					},
+					&cli.BoolFlag{Name: "dry-run", Usage: "print the request instead of sending it"},
 				},
 			},
 			{
@@ -185,6 +194,7 @@ func newIncidentsCmd() *cli.Command {
 						Name:  "milestone",
 						Usage: "post-incident milestone slug to set",
 					},
+					&cli.BoolFlag{Name: "dry-run", Usage: "print the request instead of sending it"},
 				},
 			},
 			{
@@ -253,6 +263,20 @@ func incidentsGetCmd(ctx context.Context, cmd *cli.Command) error {
 }
 
 func incidentsNoteCmd(ctx context.Context, cmd *cli.Command) error {
+	visibility := components.CreateIncidentNoteVisibilityPrivateToOrg
+	if v := cmd.String("visibility"); v != "" {
+		visibility = components.CreateIncidentNoteVisibility(v)
+		if err := visibility.UnmarshalJSON([]byte(strconv.Quote(v))); err != nil {
+			return failCmd(cmd, fmt.Errorf("--visibility %q is not valid: use private_to_org or open_to_public", v))
+		}
+	}
+	if cmd.Bool("dry-run") {
+		return previewIncidentWrite(ctx, cmd, http.MethodPost, "/notes", map[string]any{
+			"body":       cmd.String("body"),
+			"visibility": string(visibility),
+		})
+	}
+
 	client, err := getClient(ctx)
 	if err != nil {
 		return failCmd(cmd, err)
@@ -265,7 +289,8 @@ func incidentsNoteCmd(ctx context.Context, cmd *cli.Command) error {
 	body := cmd.String("body")
 
 	resp, err := client.Incidents.CreateIncidentNote(ctx, incidentID, components.CreateIncidentNote{
-		Body: body,
+		Body:       body,
+		Visibility: visibility.ToPointer(),
 	})
 	if err != nil {
 		return failCmd(cmd, err)
@@ -275,6 +300,12 @@ func incidentsNoteCmd(ctx context.Context, cmd *cli.Command) error {
 }
 
 func incidentsChatCmd(ctx context.Context, cmd *cli.Command) error {
+	if cmd.Bool("dry-run") {
+		return previewIncidentWrite(ctx, cmd, http.MethodPost, "/generic_chat_messages", map[string]any{
+			"body": cmd.String("body"),
+		})
+	}
+
 	client, err := getClient(ctx)
 	if err != nil {
 		return failCmd(cmd, err)
@@ -396,6 +427,16 @@ func incidentsTranscriptCmd(ctx context.Context, cmd *cli.Command) error {
 }
 
 func incidentsUpdateCmd(ctx context.Context, cmd *cli.Command) error {
+	if cmd.Bool("dry-run") {
+		body := map[string]any{}
+		for _, name := range []string{"severity", "summary", "priority", "description"} {
+			if v := cmd.String(name); v != "" {
+				body[name] = v
+			}
+		}
+		return previewIncidentWrite(ctx, cmd, http.MethodPatch, "", body)
+	}
+
 	client, err := getClient(ctx)
 	if err != nil {
 		return failCmd(cmd, err)
@@ -430,6 +471,14 @@ func incidentsUpdateCmd(ctx context.Context, cmd *cli.Command) error {
 }
 
 func incidentsResolveCmd(ctx context.Context, cmd *cli.Command) error {
+	if cmd.Bool("dry-run") {
+		var body map[string]any
+		if m := cmd.String("milestone"); m != "" {
+			body = map[string]any{"milestone": m}
+		}
+		return previewIncidentWrite(ctx, cmd, http.MethodPut, "/resolve", body)
+	}
+
 	client, err := getClient(ctx)
 	if err != nil {
 		return failCmd(cmd, err)
@@ -697,6 +746,17 @@ func incidentsContextCmd(ctx context.Context, cmd *cli.Command) error {
 // incidentArg is the incident ID argument, accepting "#623" for incident
 // number 623. The API resolves bare numbers itself; an unstripped "#" would
 // otherwise become a URL fragment and drop the ID from the request.
+// previewIncidentWrite is --dry-run for the curated incident writes: it prints
+// the request the command would send and sends nothing. It runs before
+// credentials are needed, like `fhcli api --dry-run`.
+func previewIncidentWrite(ctx context.Context, cmd *cli.Command, method, suffix string, body map[string]any) error {
+	if cmd.NArg() < 1 {
+		return failCmd(cmd, errors.New("incident ID is required"))
+	}
+	path := "/v1/incidents/" + url.PathEscape(incidentArg(cmd)) + suffix
+	return printDryRun(ctx, cmd, &apiRequest{Method: method, Path: path, Body: body}, "")
+}
+
 func incidentArg(cmd *cli.Command) string {
 	return strings.TrimPrefix(cmd.Args().First(), "#")
 }
