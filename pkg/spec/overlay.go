@@ -83,6 +83,35 @@ var overlay = []overlayEntry{
 		},
 	},
 	{
+		// Incident #671: a milestone + note PATCH without status_pages reached
+		// only the internal status page, and nothing said so. The ids it takes
+		// are the pages' connections (Incidents::StatusPage#integration), not
+		// the incident status page ids list_incident_status_pages returns.
+		Operation: "update_incident_impact_patch",
+		Summary:   impactSummary,
+		Prefer:    "fhcli incidents status-update",
+		SeeAlso:   []string{"list_incident_status_pages", "create_incident_status_page"},
+		Notes:     impactStatusPageNotes,
+	},
+	{
+		Operation: "update_incident_impact_put",
+		Summary:   impactSummary + " (replaces impacts)",
+		Prefer:    "fhcli incidents status-update",
+		SeeAlso:   []string{"list_incident_status_pages", "create_incident_status_page"},
+		Notes:     impactStatusPageNotes,
+	},
+	{
+		// Search ranked this first for "status page incident update" in #671;
+		// it edits the page itself, which is the wrong call mid-incident.
+		Operation: "update_nunc_connection",
+		Summary:   "Update a status page's settings",
+		SeeAlso:   []string{"update_incident_impact_patch"},
+		Notes: []string{
+			"Edits the page's own configuration (name, domain, components). " +
+				"To post during an incident, use `fhcli incidents status-update`.",
+		},
+	},
+	{
 		Operation: "create_incident_note",
 		Notes: []string{
 			"Notes default to private_to_org. open_to_public is visible outside your organization; " +
@@ -91,11 +120,26 @@ var overlay = []overlayEntry{
 	},
 }
 
+// impactSummary replaces "Update impacts for an incident": this endpoint is
+// also how a status update (note + milestone) is posted to status pages.
+const impactSummary = "Post an incident status update: note, milestone, impacts and status pages"
+
+var impactStatusPageNotes = []string{
+	"Without status_pages the note posts to the internal status page only: public pages attached to the incident are skipped. " +
+		"`fhcli incidents status-update` picks the pages for you and says where the update went.",
+	"status_pages takes [{\"id\": <connection id>, \"integration_slug\": \"nunc\"}], via --data. The connection id is " +
+		".data[].integration.id from list_incident_status_pages, not that entry's own id.",
+}
+
 type overlayEntry struct {
 	Operation string
-	Fields    map[string]fieldFix
-	SeeAlso   []string
-	Notes     []string
+	// Summary replaces the spec's summary, which feeds help and search.
+	Summary string
+	Fields  map[string]fieldFix
+	SeeAlso []string
+	Notes   []string
+	// Prefer names a curated command to use instead (see Operation.Prefer).
+	Prefer string
 }
 
 // fieldFix replaces a parameter's documented type and/or enum.
@@ -117,6 +161,12 @@ func applyOverlay(s *Spec, entries []overlayEntry) {
 			continue
 		}
 		op := &s.Operations[i]
+		if e.Summary != "" {
+			op.Summary = e.Summary
+		}
+		if e.Prefer != "" {
+			op.Prefer = e.Prefer
+		}
 		op.SeeAlso = append(op.SeeAlso, e.SeeAlso...)
 		op.Notes = append(op.Notes, e.Notes...)
 		for _, group := range [][]Param{op.PathParams, op.QueryParams, op.BodyFields} {

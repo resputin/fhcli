@@ -83,6 +83,9 @@ func newOperationCmd(op spec.Operation, reserved map[string]bool, run operationF
 	}
 
 	var help []string
+	if op.Prefer != "" {
+		help = append(help, "Prefer `"+op.Prefer+"`, which does this more safely.")
+	}
 	if op.Description != "" {
 		help = append(help, op.Description)
 	}
