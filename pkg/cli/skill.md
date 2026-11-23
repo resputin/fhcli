@@ -17,7 +17,7 @@ Activate when the user mentions: incidents, outages, SEV1/SEV2/etc, pages, on-ca
 When you first get paged or need to understand an incident fast, use these compound commands instead of running individual ones:
 
 - **`fhcli incidents triage <id>`** — the "just got paged" command. Returns incident details, alerts, and AI summaries in one call.
-  Key response fields: `incident` (full incident entity), `alerts` (linked alert data with sources and services), `summaries` (AI-generated audience summaries)
+  Key response fields: `incident` (full incident entity), `alerts` (linked alerts; each item wraps the alert under `.alert`, so read `alerts.data[].alert.summary`), `summaries` (AI-generated audience summaries)
 
 - **`fhcli incidents context <id>`** — the "understand the blast radius" command. Returns the incident enriched with full service details (including dashboard links) and owner team details (including Slack channels and on-call schedules).
   Key response fields: `incident`, `services[].service` (full service entity), `services[].dashboard_links[]` (extracted name/url pairs from service links), `teams[].team` (full team entity with slack_channel), `teams[].on_call_schedules` (current/next shift data)
@@ -56,6 +56,7 @@ When a user joins an investigation or asks about an incident, follow this sequen
    ```
    fhcli incidents events <id> --types "note,chat_message"
    ```
+   An unknown type is an error that lists the valid ones. Bodies of Slack chat messages and notes often come back as `data: {}` (an API gap); if you need what people said, read the incident's Slack channel instead.
 
 6. **Read the call transcript** — if there's a conference call happening:
    ```
@@ -109,10 +110,11 @@ These gaps are posted as a single note during the "wrapping up" phase (see below
 
 As the user investigates, be proactive:
 
-- **Post findings as notes** after significant discoveries (kubectl output, log patterns, root cause hypotheses):
+- **Post findings as notes** after significant discoveries (kubectl output, log patterns, root cause hypotheses). Notes are `private_to_org` unless you pass `--visibility open_to_public`, which is visible outside the organization: only do that when the user asked for a public update.
   ```
   fhcli incidents note <id> --body "Found elevated error rates in payment-service logs starting at 14:23 UTC. Stack traces point to database connection pool exhaustion."
   ```
+  For anything longer than a line, write it to a file and pass `--body @note.md` (or `@-` for stdin). `note`, `chat`, `status-update` and `update --summary/--description` all accept `@file`.
 
 - **Post quick updates as chat messages** for smaller observations:
   ```
@@ -129,6 +131,18 @@ As the user investigates, be proactive:
   ```
   fhcli incidents update <id> --summary "Database connection pool exhaustion causing payment failures"
   ```
+
+## Status page updates
+
+**Use `fhcli incidents status-update` to post to status pages.** A note, or a milestone change sent through `fhcli api incidents update-incident-impact-patch` without `status_pages`, reaches only FireHydrant's internal status page, silently skipping the public one.
+
+1. `fhcli incidents status-pages <id>`: see which pages are attached (`name`, `url`). If none are, attaching one is a separate, user-approved step (`fhcli search attach status page`).
+2. Write the update to a file, then dry-run it. You must say where it goes, with `--page` (a page's name, URL or ID; repeatable), `--all-pages`, or `--internal-only`:
+   ```
+   fhcli incidents status-update <id> --note @update.md --milestone identified --page status.example.com --dry-run
+   ```
+   The dry run's `note` names the pages it will publish to. Public text goes to customers: show the user the exact wording and the pages, and send only after they agree.
+3. Send the same command without `--dry-run`. The output's `published_to` lists where the update went. Subscribers of public pages are emailed unless you pass `--no-email`.
 
 ## Wrapping up
 
@@ -185,7 +199,8 @@ fhcli api incidents list-incidents --status open --per-page 5
 - DELETE operations refuse to run without `--yes`. **Never pass `--yes` unless the user explicitly confirmed that deletion in this conversation.**
 - An operation's `--help` ends with a "Response:" line listing the documented response fields (for lists, `data[] (…)` shows each item's fields) — use it to write `jq` filters without a probing call. It comes from the spec, so treat it as a guide, not a guarantee.
 - Responses are the API's raw JSON. Errors are JSON on stderr with a non-zero exit code: `error` is the message, and an API failure adds `status`, `method`, `path` and `response` (the API's error body, parsed), so branch on `.status` (e.g. 404 = not found or not visible to this org) and read `.response.detail`. A timeout (504) error names the date/time filter flags to narrow the request with — retry with a tighter window (e.g. `--start-datetime`) rather than the same request.
-- **Always pass `--visibility` explicitly on notes** (`private_to_org` unless the user asked for a public update): `open_to_public` is visible outside the organization.
+- **Always pass `--visibility` explicitly on `fhcli api` notes** (`private_to_org` unless the user asked for a public update): `open_to_public` is visible outside the organization. The curated `fhcli incidents note` defaults to `private_to_org`.
+- A search result with `prefer` names a curated command that does the job more safely (e.g. `fhcli incidents status-update` for posting to status pages). Use it instead of `command`.
 
 ### Recipe: comment on an alert
 
@@ -227,8 +242,10 @@ If a create returns a 5xx, nothing is confirmed either way: list the team's sche
 | `fhcli incidents summary <id>` | Get AI-generated audience summaries |
 | `fhcli incidents events <id> [--types T] [--page N] [--per-page N]` | List timeline events |
 | `fhcli incidents transcript <id> [--sort asc\|desc]` | List call transcript entries |
-| `fhcli incidents note <id> --body "..."` | Post a status update note |
+| `fhcli incidents note <id> --body "..." [--visibility V]` | Post a timeline note (`private_to_org` by default) |
 | `fhcli incidents chat <id> --body "..."` | Post a chat message |
+| `fhcli incidents status-pages <id>` | List the status pages attached to the incident |
+| `fhcli incidents status-update <id> --note @f (--page P… \| --all-pages \| --internal-only) [--milestone M] [--no-email] [--dry-run]` | Post an update to status pages |
 | `fhcli incidents update <id> [--severity S] [--summary S] [--priority P] [--description D]` | Update incident fields |
 | `fhcli incidents resolve <id> [--milestone M]` | Resolve an incident |
 | `fhcli incidents triage <id>` | Get incident + alerts + summaries in one call |

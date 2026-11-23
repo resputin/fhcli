@@ -86,14 +86,19 @@ func newIncidentsCmd() *cli.Command {
 			},
 			{
 				Name:   "note",
-				Usage:  "post a status update note on an incident",
+				Usage:  "post a note on an incident's timeline (to update status pages, use status-update)",
 				Action: incidentsNoteCmd,
 				Flags: []cli.Flag{
 					&cli.StringFlag{
 						Name:     "body",
 						Aliases:  []string{"b"},
-						Usage:    "note body text",
+						Usage:    "note body text" + textFlagUsage,
 						Required: true,
+					},
+					&cli.StringFlag{
+						Name:  "visibility",
+						Usage: "who can see the note: " + strings.Join(noteVisibilities, ", ") + "; open_to_public is visible outside your organization",
+						Value: "private_to_org",
 					},
 				},
 			},
@@ -105,7 +110,7 @@ func newIncidentsCmd() *cli.Command {
 					&cli.StringFlag{
 						Name:     "body",
 						Aliases:  []string{"b"},
-						Usage:    "message body text",
+						Usage:    "message body text" + textFlagUsage,
 						Required: true,
 					},
 				},
@@ -137,7 +142,7 @@ func newIncidentsCmd() *cli.Command {
 					},
 					&cli.StringFlag{
 						Name:  "types",
-						Usage: "comma-separated event types to filter (e.g. note,chat_message,incident_status)",
+						Usage: "comma-separated event types to filter, e.g. note,chat_message,role_update (the event/ prefix is optional; an unknown type is an error that lists the valid ones)",
 					},
 				},
 			},
@@ -164,7 +169,7 @@ func newIncidentsCmd() *cli.Command {
 					},
 					&cli.StringFlag{
 						Name:  "summary",
-						Usage: "incident summary text",
+						Usage: "incident summary text" + textFlagUsage,
 					},
 					&cli.StringFlag{
 						Name:  "priority",
@@ -172,9 +177,58 @@ func newIncidentsCmd() *cli.Command {
 					},
 					&cli.StringFlag{
 						Name:  "description",
-						Usage: "incident description",
+						Usage: "incident description" + textFlagUsage,
 					},
 				},
+			},
+			{
+				Name:      "status-update",
+				Usage:     "post an update to the incident's status pages, optionally moving its milestone",
+				ArgsUsage: "<incident id or number>",
+				Description: "Posts --note to the status pages attached to the incident. Choose where it goes:\n" +
+					"--page (repeatable: a page's name, URL or ID, as `incidents status-pages` lists them),\n" +
+					"--all-pages, or --internal-only (FireHydrant's internal status page only).\n" +
+					"Pages are attached with `fhcli api incidents create-incident-status-page`.\n" +
+					"Use --dry-run to see the request and the pages it targets without sending it.",
+				Action: incidentsStatusUpdateCmd,
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:     "note",
+						Aliases:  []string{"body", "b"},
+						Usage:    "update text" + textFlagUsage,
+						Required: true,
+					},
+					&cli.StringFlag{
+						Name:  "milestone",
+						Usage: "milestone slug to move the incident to (e.g. identified, mitigated; valid slugs: fhcli api incident-settings list-lifecycle-phases)",
+					},
+					&cli.StringSliceFlag{
+						Name:  "page",
+						Usage: "status page to post to: its name, URL or ID (repeatable)",
+					},
+					&cli.BoolFlag{
+						Name:  "all-pages",
+						Usage: "post to every status page attached to the incident",
+					},
+					&cli.BoolFlag{
+						Name:  "internal-only",
+						Usage: "post to FireHydrant's internal status page only",
+					},
+					&cli.BoolFlag{
+						Name:  "no-email",
+						Usage: "don't email the public pages' subscribers (they are emailed by default)",
+					},
+					&cli.BoolFlag{
+						Name:  "dry-run",
+						Usage: "print the request and the pages it targets instead of sending it",
+					},
+				},
+			},
+			{
+				Name:      "status-pages",
+				Usage:     "list the status pages attached to an incident",
+				ArgsUsage: "<incident id or number>",
+				Action:    incidentsStatusPagesCmd,
 			},
 			{
 				Name:   "resolve",
@@ -265,10 +319,18 @@ func incidentsNoteCmd(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return failCmd(cmd, err)
 	}
-	body := cmd.String("body")
+	visibility, err := noteVisibility(cmd.String("visibility"))
+	if err != nil {
+		return failCmd(cmd, err)
+	}
+	body, err := textFlag(cmd, "body", new(bool))
+	if err != nil {
+		return failCmd(cmd, err)
+	}
 
 	resp, err := client.Incidents.CreateIncidentNote(ctx, incidentID, components.CreateIncidentNote{
-		Body: body,
+		Body:       body,
+		Visibility: visibility.ToPointer(),
 	})
 	if err != nil {
 		return failCmd(cmd, err)
@@ -290,7 +352,10 @@ func incidentsChatCmd(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return failCmd(cmd, err)
 	}
-	body := cmd.String("body")
+	body, err := textFlag(cmd, "body", new(bool))
+	if err != nil {
+		return failCmd(cmd, err)
+	}
 
 	resp, err := client.Incidents.CreateIncidentChatMessage(ctx, incidentID, components.CreateIncidentChatMessage{
 		Body: body,
@@ -372,7 +437,11 @@ func incidentsEventsCmd(ctx context.Context, cmd *cli.Command) error {
 
 	var types *string
 	if t := cmd.String("types"); t != "" {
-		types = firehydrantgosdk.String(t)
+		normalized, err := normalizeEventTypes(t)
+		if err != nil {
+			return failCmd(cmd, err)
+		}
+		types = firehydrantgosdk.String(normalized)
 	}
 
 	resp, err := client.Incidents.ListIncidentEvents(ctx, incidentID, types, firehydrantgosdk.Int(page), firehydrantgosdk.Int(perPage))
@@ -432,14 +501,21 @@ func incidentsUpdateCmd(ctx context.Context, cmd *cli.Command) error {
 	if s := cmd.String("severity"); s != "" {
 		update.Severity = firehydrantgosdk.String(s)
 	}
-	if s := cmd.String("summary"); s != "" {
-		update.Summary = firehydrantgosdk.String(s)
-	}
 	if s := cmd.String("priority"); s != "" {
 		update.Priority = firehydrantgosdk.String(s)
 	}
-	if s := cmd.String("description"); s != "" {
-		update.Description = firehydrantgosdk.String(s)
+	stdinUsed := false
+	for _, f := range []struct {
+		name string
+		dst  **string
+	}{{"summary", &update.Summary}, {"description", &update.Description}} {
+		v, err := textFlag(cmd, f.name, &stdinUsed)
+		if err != nil {
+			return failCmd(cmd, err)
+		}
+		if v != "" {
+			*f.dst = firehydrantgosdk.String(v)
+		}
 	}
 
 	resp, err := client.Incidents.UpdateIncident(ctx, incidentID, update)

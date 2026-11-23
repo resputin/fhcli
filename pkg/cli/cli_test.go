@@ -177,7 +177,7 @@ func TestIncidentSubcommands(t *testing.T) {
 		subcommands[c.Name] = true
 	}
 
-	expected := []string{"list", "get", "note", "chat", "alerts", "summary", "events", "transcript", "update", "resolve", "triage", "context"}
+	expected := []string{"list", "get", "note", "chat", "alerts", "summary", "events", "transcript", "update", "status-update", "status-pages", "resolve", "triage", "context"}
 	for _, name := range expected {
 		if !subcommands[name] {
 			t.Errorf("expected incidents subcommand %q to be registered", name)

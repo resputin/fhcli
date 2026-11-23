@@ -58,6 +58,9 @@ type Operation struct {
 	// spec lacks; both come from the local overlay (overlay.go).
 	SeeAlso []string
 	Notes   []string
+	// Prefer is a curated fhcli command that does this operation's job
+	// more safely (e.g. "fhcli incidents status-update"), from the overlay.
+	Prefer string
 }
 
 // Spec is the parsed set of operations.

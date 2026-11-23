@@ -92,6 +92,9 @@ func TestOverlayEntriesAreNeeded(t *testing.T) {
 			t.Errorf("overlay targets unknown operation %s", e.Operation)
 			continue
 		}
+		if e.Summary != "" && e.Summary == op.Summary {
+			t.Errorf("overlay %s: spec summary is already %q; remove the override", e.Operation, op.Summary)
+		}
 		for _, ref := range e.SeeAlso {
 			if _, ok := ops[ref]; !ok {
 				t.Errorf("overlay %s: see-also %s is not an operation", e.Operation, ref)

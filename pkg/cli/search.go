@@ -24,7 +24,10 @@ type searchHit struct {
 	// Required names the inputs the call needs besides Args: --flag for a
 	// generated flag, data.<field> for a body field only settable via --data.
 	Required []string `json:"required"`
-	Score    float64  `json:"score"`
+	// Prefer is a curated command that does this job more safely; use it
+	// instead of Command when present.
+	Prefer string  `json:"prefer,omitempty"`
+	Score  float64 `json:"score"`
 }
 
 func newSearchCmd(sp *spec.Spec, loadErr error) *cli.Command {
@@ -70,6 +73,7 @@ func searchHits(results []spec.Result) []searchHit {
 			Path:     op.Path,
 			Summary:  op.Summary,
 			Required: requiredInputs(op, reserved),
+			Prefer:   op.Prefer,
 			Score:    math.Round(r.Score*100) / 100,
 		})
 	}
@@ -106,7 +110,11 @@ func printSearchTable(hits []searchHit) error {
 				command += " " + r + " <" + strings.TrimPrefix(r, "--") + ">"
 			}
 		}
-		fmt.Fprintf(w, "%s\t%s\n", command, h.Summary)
+		summary := h.Summary
+		if h.Prefer != "" {
+			summary += " (prefer: " + h.Prefer + ")"
+		}
+		fmt.Fprintf(w, "%s\t%s\n", command, summary)
 	}
 	return w.Flush()
 }

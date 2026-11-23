@@ -4,6 +4,19 @@ This project follows [Semantic Versioning](https://semver.org/). Before 1.0, a m
 
 ## [Unreleased]
 
+### Added
+
+- **Status page updates.** `fhcli incidents status-update <id> --note @f` posts to the incident's status pages. You must say where it goes with `--page`, `--all-pages` or `--internal-only`. It also takes `--milestone`, `--no-email` and `--dry-run`, and its output lists `published_to`. `fhcli incidents status-pages <id>` lists the attached pages.
+- **`--visibility` on `fhcli incidents note`**, defaulting to `private_to_org`.
+- **`prefer` in search results** names a curated command that does an operation's job more safely; `--help` on that operation says the same.
+
+### Changed
+
+- **Curated text flags read files.** `incidents note|chat --body`, `incidents status-update --note` and `incidents update --summary|--description` accept `@file` and `@-`, like `fhcli api` string flags. Before, the path was posted as the text. A missing file is an error.
+- **`incidents events --types`** accepts short names (`chat_message`) and sends the `event/` form the API matches. Short names used to return no events. Unknown types are now an error.
+- **Search** ranks the incident impact call (how status updates are posted) above status page settings for status-update queries. `--help` on the impact calls explains that leaving out `status_pages` posts only to the internal page.
+- **Login.** Cancelling on the consent page prints `login cancelled` instead of the authorization server's `access_denied` text. The browser pages after Authorize or Cancel now match the consent screen.
+
 ## [0.1.0]
 
 The first release since v0.0.15 (August 2025). fhcli grows from a change-event submitter into a general FireHydrant CLI for people and AI agents. Change-event usage from CI is backwards compatible.

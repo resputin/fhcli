@@ -345,3 +345,22 @@ func TestSearchRealSpecFindsAlertComments(t *testing.T) {
 		t.Errorf("search %q: create_incident_note ranked %d, want 1", "add note to incident", r)
 	}
 }
+
+// Incident #671: "status page incident update" ranked update_nunc_connection
+// (which edits the page's settings) first, ahead of the status-update call.
+func TestSearchRealSpecFindsStatusUpdate(t *testing.T) {
+	s := loadEmbeddedSpec(t)
+
+	for _, q := range []string{"status page incident update", "post status update", "incident status update public"} {
+		results := s.Search(q, 0)
+		if r := rank(results, "update_incident_impact_patch"); r != 1 {
+			t.Errorf("search %q: update_incident_impact_patch ranked %d, want 1", q, r)
+		}
+		if r := rank(results, "update_nunc_connection"); r > 0 && r < 3 {
+			t.Errorf("search %q: update_nunc_connection ranked %d, want below the impact calls", q, r)
+		}
+	}
+	if op := findOp(t, s, "update_incident_impact_patch"); op.Prefer != "fhcli incidents status-update" {
+		t.Errorf("update_incident_impact_patch prefer = %q", op.Prefer)
+	}
+}
