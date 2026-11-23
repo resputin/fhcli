@@ -3,9 +3,11 @@ package auth
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -103,8 +105,42 @@ func TestLoginAccessDenied(t *testing.T) {
 
 	_, err := Login(context.Background(), f.region(), LoginOptions{Ports: []int{freePort(t)}, OpenBrowser: followingBrowser(t)})
 
-	if err == nil || !strings.Contains(err.Error(), "access_denied") || !strings.Contains(err.Error(), "denied the request") {
-		t.Errorf("err = %v, want access_denied with description", err)
+	if !errors.Is(err, ErrLoginCancelled) {
+		t.Errorf("err = %v, want ErrLoginCancelled", err)
+	}
+	if err != nil && strings.Contains(err.Error(), "denied the request") {
+		t.Errorf("err = %v: a cancel shouldn't carry the authorization server's wording", err)
+	}
+}
+
+func TestCallbackPages(t *testing.T) {
+	for _, tc := range []struct {
+		name, query string
+		want        []string
+		notWant     []string
+	}{
+		{"success", "state=s&code=c", []string{"You're logged in to the CLI", "data:image/svg+xml;base64,"}, []string{"Details"}},
+		{"cancelled", "state=s&error=access_denied&error_description=The+resource+owner+denied+the+request.",
+			[]string{"Login cancelled", "fhcli login", "access_denied — The resource owner denied the request."}, nil},
+		{"failed", "state=s&error=server_error&error_description=%3Cscript%3E", []string{"Login failed", "server_error — &lt;script&gt;"}, []string{"<script>"}},
+		{"wrong state", "state=other&code=c", []string{"doesn&#39;t match the login in progress"}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			results := make(chan callbackResult, 1)
+			rec := httptest.NewRecorder()
+			callbackHandler("s", results).ServeHTTP(rec, httptest.NewRequest("GET", "/callback?"+tc.query, nil))
+			body := rec.Body.String()
+			for _, w := range tc.want {
+				if !strings.Contains(body, w) {
+					t.Errorf("page missing %q", w)
+				}
+			}
+			for _, w := range tc.notWant {
+				if strings.Contains(body, w) {
+					t.Errorf("page contains %q", w)
+				}
+			}
+		})
 	}
 }
 

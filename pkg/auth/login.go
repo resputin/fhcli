@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html"
 	"io"
 	"net"
 	"net/http"
@@ -194,18 +193,24 @@ func callbackHandler(state string, results chan<- callbackResult) http.Handler {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		if q.Get("state") != state {
 			w.WriteHeader(http.StatusBadRequest)
-			fmt.Fprint(w, page("This callback doesn't match the login in progress. Return to your terminal."))
+			fmt.Fprint(w, noticePage("This login isn't in progress", "This callback doesn't match the login in progress. Return to your terminal."))
 			return
 		}
 		res := callbackResult{code: q.Get("code")}
+		var detail string
 		switch {
 		case q.Get("error") != "":
-			msg := q.Get("error")
+			detail = q.Get("error")
 			if d := q.Get("error_description"); d != "" {
-				msg += ": " + d
+				detail += " — " + d
 			}
-			res = callbackResult{err: errors.New("login failed: " + msg)}
+			if q.Get("error") == "access_denied" {
+				res = callbackResult{err: ErrLoginCancelled}
+			} else {
+				res = callbackResult{err: errors.New("login failed: " + strings.Replace(detail, " — ", ": ", 1))}
+			}
 		case res.code == "":
+			detail = "callback had no code"
 			res = callbackResult{err: errors.New("login failed: callback had no code")}
 		}
 		delivered := false
@@ -216,19 +221,22 @@ func callbackHandler(state string, results chan<- callbackResult) http.Handler {
 
 		switch {
 		case !delivered:
-			fmt.Fprint(w, page("This login was already handled. Return to your terminal."))
+			fmt.Fprint(w, noticePage("Login already handled", "This login was already handled. Return to your terminal."))
+		case errors.Is(res.err, ErrLoginCancelled):
+			fmt.Fprint(w, cancelledPage(detail))
 		case res.err != nil:
-			fmt.Fprint(w, page(html.EscapeString(res.err.Error())))
+			fmt.Fprint(w, failedPage(detail))
 		default:
-			fmt.Fprint(w, page("Authorization received. Return to your terminal; you can close this tab."))
+			fmt.Fprint(w, successPage())
 		}
 	})
 	return mux
 }
 
-func page(msg string) string {
-	return `<!doctype html><meta charset="utf-8"><title>fhcli login</title><body style="font-family:system-ui;margin:4em"><p>` + msg + `</p></body>`
-}
+// ErrLoginCancelled is returned when the user cancels on the consent page
+// (OAuth access_denied). It's a choice, not a failure, so it carries none of
+// the authorization server's wording.
+var ErrLoginCancelled = errors.New("login cancelled: the CLI wasn't given access; run `fhcli login` to try again")
 
 // Identity is the /v1/current_user response fields fhcli uses.
 type Identity struct {
